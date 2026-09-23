@@ -117,6 +117,7 @@ class RiskView(BaseModel):
     vega: float | None
     avg_iv: float | None
     technical: dict = Field(default_factory=dict)
+    technical_source: str | None = None
     components: dict = Field(default_factory=dict)
     legs: list[dict] = Field(default_factory=list)
     probability: dict | None = None
