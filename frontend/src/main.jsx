@@ -14,29 +14,32 @@ function RiskChart({ history=[], events=[], entrySpot=null }) {
   const validHistory = history.filter(x => x.spot != null)
   if (validHistory.length < 2) return <div className="chart-empty"><strong>Building risk history</strong><span>Live underlying prices are captured every minute. The chart will appear after two valid snapshots.</span></div>
   const width=920, height=280, pad=42
+  const entryRisk=Number(history[0]?.risk_score)||0
   const scores=history.map(x=>Number(x.risk_score)||0)
+  const riskDelta=scores.map(v=>v-entryRisk)
   const baseSpot=entrySpot ?? validHistory[0].spot
   const changes=history.map(x=>x.spot != null && baseSpot ? ((x.spot/baseSpot)-1)*100 : null)
+  const maxRisk=Math.max(1,...riskDelta.map(Math.abs))
   const maxC=Math.max(1,...changes.filter(v=>v!=null).map(Math.abs))
+  const scale=Math.max(maxRisk,maxC)
   const x=i=>pad+i*(width-pad*2)/(Math.max(1,history.length-1))
-  const y=v=>height-pad-(v/100)*(height-pad*2)
-  const yc=v=>height-pad-((v+maxC)/(2*maxC))*(height-pad*2)
-  const points=arr=>arr.map((v,i)=>v==null?'':x(i)+','+y(v)).filter(Boolean).join(' ')
+  const yc=v=>height-pad-((v+scale)/(2*scale))*(height-pad*2)
+  const points=arr=>arr.map((v,i)=>v==null?'':x(i)+','+yc(v)).filter(Boolean).join(' ')
   const pointsC=changes.map((v,i)=>v==null?'':x(i)+','+yc(v)).filter(Boolean).join(' ')
   const nearestIndex=ts=>{let best=0,bestDiff=Infinity;history.forEach((h,i)=>{const d=Math.abs(new Date(h.timestamp)-new Date(ts));if(d<bestDiff){best=i;bestDiff=d}});return best}
   return <div className="chart-wrap">
-    <div className="chart-heading"><div><strong>Risk timeline</strong><span>Risk starts at 0 at entry. Spot change is measured from the captured entry spot.</span></div><div className="chart-entry"><span>Entry baseline</span><b>{baseSpot ? '₹'+num(baseSpot) : '—'}</b></div></div>
+    <div className="chart-heading"><div><strong>Risk timeline</strong><span>Risk movement starts at 0. Absolute risk is shown in the badge above.</span></div><div className="chart-entry"><span>Entry baseline · Entry risk</span><b>{baseSpot ? '₹'+num(baseSpot) : '—'} · {num(entryRisk,0)}/100</b></div></div>
     <svg viewBox={'0 0 '+width+' '+height} className="risk-chart" role="img">
-      <line x1={pad} x2={width-pad} y1={y(70)} y2={y(70)} className="grid-critical" />
-      <line x1={pad} x2={width-pad} y1={y(40)} y2={y(40)} className="grid-warning" />
-      <line x1={pad} x2={width-pad} y1={y(0)} y2={y(0)} className="grid-zero" />
-      <polyline points={points(scores)} fill="none" className="risk-line" />
+      <line x1={pad} x2={width-pad} y1={yc(scale)} y2={yc(scale)} className="grid-zero" />
+      <line x1={pad} x2={width-pad} y1={yc(0)} y2={yc(0)} className="grid-zero" />
+      <line x1={pad} x2={width-pad} y1={yc(-scale)} y2={yc(-scale)} className="grid-zero" />
+      <polyline points={points(riskDelta)} fill="none" className="risk-line" />
       {pointsC && <polyline points={pointsC} fill="none" className="spot-line" />}
-      {events.map((e,n)=>{const i=nearestIndex(e.timestamp);return <g key={e.timestamp+'-'+e.event_type+'-'+n}><circle cx={x(i)} cy={y(scores[i])} r="4" className="event-dot"/><text x={x(i)+6} y={y(scores[i])-8} className="svg-label">{e.event_type.replaceAll('_',' ')}</text></g>})}
-      <text x={pad+5} y={y(70)-7} className="svg-label">70 Critical</text>
-      <text x={pad+5} y={y(40)-7} className="svg-label">40 Warning</text>
-      <text x={pad+5} y={y(0)-7} className="svg-label">0 Entry</text>
-      <text x={width-pad-75} y={18} className="svg-label">Risk / 100</text>
+      {events.map((e,n)=>{const i=nearestIndex(e.timestamp);return <g key={e.timestamp+'-'+e.event_type+'-'+n}><circle cx={x(i)} cy={yc(riskDelta[i])} r="4" className="event-dot"/><text x={x(i)+6} y={yc(riskDelta[i])-8} className="svg-label">{e.event_type.replaceAll('_',' ')}</text></g>})}
+      <text x={pad+5} y={yc(scale)-7} className="svg-label">+{num(scale,0)} risk</text>
+      <text x={pad+5} y={yc(0)-7} className="svg-label">0 Entry</text>
+      <text x={pad+5} y={yc(-scale)-7} className="svg-label">-{num(scale,0)} risk</text>
+      <text x={width-pad-110} y={18} className="svg-label">Change from entry</text>
     </svg>
     <div className="chart-legend"><span><i className="legend-risk"/> Risk score</span><span><i className="legend-spot"/> Spot change %</span></div>
     <div className="event-list">{events.slice(-8).reverse().map((e,i)=><span key={i}><b>{e.event_type.replaceAll('_',' ')}</b> · {new Date(e.timestamp).toLocaleTimeString()} · {e.message}</span>)}</div>
