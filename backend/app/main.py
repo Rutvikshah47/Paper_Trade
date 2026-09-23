@@ -227,11 +227,11 @@ def _legacy_entry_spot(db: Session, strategy: Strategy) -> float | None:
         if not underlying:
             return None
         candles = resolver.get_historical_daily_closes(underlying, sessions=5)
-        if len(candles) < 2:
+        trading_candles = [x for x in candles if str(x.get('timestamp', ''))[:10] < date.today().isoformat()]
+        if len(trading_candles) < 2:
             return None
-        # API returns recent trading sessions; index 1 is the previous trading day.
-        # For the requested temporary fallback we intentionally use the N-2 trading-session close.
-        fallback = candles[1]['close']
+        # Exclude today's candle, then use the second most recent completed trading session.
+        fallback = trading_candles[1]['close']
         entry.spot = fallback
         entry.message = (entry.message or 'Strategy entered paper tracking') + ' · Legacy entry spot backfilled from N-2 trading-day close'
         snapshot = db.query(RiskSnapshot).filter(
