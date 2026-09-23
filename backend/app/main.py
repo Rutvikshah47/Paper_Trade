@@ -45,6 +45,11 @@ _running = Event()
 _risk_thread: Thread | None = None
 _current_bars: dict[str, dict[str, Any]] = {}
 
+# Cutover for the new entry-baseline behavior. Strategies created before this
+# timestamp are legacy strategies; their underlying entry baseline is backfilled
+# from the N-2 completed trading-session close.
+LEGACY_ENTRY_CUTOFF = datetime(2026, 9, 23, 14, 42, 2)
+
 
 def _ensure_underlying(symbol: str) -> str | None:
     symbol = symbol.upper()
@@ -211,39 +216,59 @@ def _save_event_transitions(db: Session, strategy: Strategy, result: dict[str, A
 
 
 def _legacy_entry_spot(db: Session, strategy: Strategy) -> float | None:
-    """Backfill only legacy strategies whose persisted ENTRY spot is missing/zero.
-    Uses the second-most-recent available trading-day close of the underlying.
+    """Backfill the underlying entry baseline for a pre-cutover strategy.
+
+    Legacy strategies use the N-2 completed trading-session close. New
+    strategies never enter this path and keep their real live entry spot.
     """
     entry = db.query(StrategyEvent).filter(
         StrategyEvent.strategy_id == strategy.id, StrategyEvent.event_type == 'ENTRY'
     ).order_by(StrategyEvent.timestamp.asc()).first()
-    if not entry or (entry.spot is not None and entry.spot > 0):
-        return entry.spot if entry else None
+    if not entry:
+        return None
+
+    created_at = strategy.created_at
+    if created_at is not None and created_at.tzinfo is not None:
+        created_at = created_at.replace(tzinfo=None)
+    if created_at is not None and created_at >= LEGACY_ENTRY_CUTOFF:
+        return entry.spot
+
     symbol = strategy.orders[0].symbol if strategy.orders else None
     if not symbol:
-        return None
+        return entry.spot
+
     try:
         underlying = _ensure_underlying(symbol)
         if not underlying:
-            return None
+            return entry.spot
+
         candles = resolver.get_historical_daily_closes(underlying, sessions=5)
-        trading_candles = [x for x in candles if str(x.get('timestamp', ''))[:10] < date.today().isoformat()]
+        trading_candles = [
+            x for x in candles
+            if str(x.get('timestamp', ''))[:10] < date.today().isoformat()
+        ]
         trading_candles.sort(key=lambda x: str(x.get('timestamp', '')), reverse=True)
         if len(trading_candles) < 2:
-            return None
-        # Exclude today's candle, then use the second most recent completed trading session (N-2).
-        fallback = trading_candles[1]['close']
+            return entry.spot
+
+        # N-2 = second-most-recent completed trading session.
+        fallback = float(trading_candles[1]['close'])
         entry.spot = fallback
-        entry.message = (entry.message or 'Strategy entered paper tracking') + ' · Legacy entry spot backfilled from N-2 trading-day close'
+        entry.message = (
+            (entry.message or 'Strategy entered paper tracking').split(' · Legacy entry spot')[0]
+            + ' · Legacy entry spot backfilled from N-2 trading-day close'
+        )
+
         snapshot = db.query(RiskSnapshot).filter(
             RiskSnapshot.strategy_id == strategy.id
         ).order_by(RiskSnapshot.timestamp.asc()).first()
-        if snapshot and (snapshot.spot is None or snapshot.spot <= 0):
+        if snapshot:
             snapshot.spot = fallback
+
         return fallback
     except Exception as exc:
         print(f'[Risk] Legacy entry spot backfill failed for strategy {strategy.id}: {exc}')
-        return None
+        return entry.spot
 
 def _backfill_legacy_entry_spots(db: Session) -> None:
     rows = db.query(Strategy).options(joinedload(Strategy.orders)).filter(Strategy.status == 'OPEN').all()
@@ -283,8 +308,12 @@ def _risk_for_strategy(db: Session, strategy: Strategy) -> dict[str, Any]:
         StrategyEvent.strategy_id == strategy.id, StrategyEvent.event_type == "ENTRY"
     ).order_by(StrategyEvent.timestamp.asc()).first()
     entry_spot = entry.spot if entry and entry.spot is not None else (history[0].spot if history else spot)
+    entry_source = 'N-2 trading-session close (legacy)' if strategy.created_at and (
+        (strategy.created_at.replace(tzinfo=None) if strategy.created_at.tzinfo else strategy.created_at) < LEGACY_ENTRY_CUTOFF
+    ) else 'Live underlying LTP captured at strategy entry'
     events = db.query(StrategyEvent).filter(StrategyEvent.strategy_id == strategy.id).order_by(StrategyEvent.timestamp.asc()).limit(300).all()
     result['entry_spot'] = entry_spot
+    result['entry_spot_source'] = entry_source
     result['spot_change_pct'] = ((spot / entry_spot)-1)*100 if spot and entry_spot else None
     result['history'] = history
     result['strategy_id'] = strategy.id
