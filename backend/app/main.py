@@ -394,6 +394,10 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
     entry_key=_underlying_keys.get(strategy.orders[0].symbol)
     entry_spot=live_prices.get(entry_key) if entry_key else None
     if entry_spot is None:
+        # Upstox full option feed exposes optionGreeks.up, the live underlier price.
+        underliers=market.get_underlier_ltps()
+        entry_spot=next((underliers.get(o.instrument_key) for o in strategy.orders if underliers.get(o.instrument_key) is not None), None)
+    if entry_spot is None:
         db.delete(strategy)
         db.commit()
         raise HTTPException(409, 'Live underlying LTP unavailable. Please connect the market feed and try again.')
