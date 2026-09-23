@@ -120,7 +120,8 @@ def _risk_bars(db: Session, symbol: str, underlying_key: str | None) -> tuple[li
         return cached[1], 'Daily historical context'
 
     try:
-        candles = resolver.get_historical_daily_closes(underlying_key, sessions=60)
+        # Use a long warm-up window for Wilder RSI/ADX/ATR calculations.
+        candles = resolver.get_historical_daily_closes(underlying_key, sessions=250)
         daily = [
             SimpleNamespace(
                 timestamp=x.get('timestamp'), open=x.get('open'), high=x.get('high'),
