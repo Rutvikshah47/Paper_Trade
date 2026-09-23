@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
@@ -26,11 +26,7 @@ class Settings:
     )
     upstox_verify_ssl: bool = _bool("UPSTOX_VERIFY_SSL", True)
     telegram_verify_ssl: bool = _bool("TELEGRAM_VERIFY_SSL", True)
-    cors_origins: list[str] = None
-
-    def __post_init__(self):
-        raw = os.getenv("CORS_ORIGINS", "*").strip()
-        object.__setattr__(self, "cors_origins", [x.strip() for x in raw.split(",") if x.strip()] or ["*"])
+    cors_origins: list[str] = field(default_factory=lambda: [x.strip() for x in os.getenv("CORS_ORIGINS", "*").split(",") if x.strip()] or ["*"])
 
 
 settings = Settings()
