@@ -48,52 +48,102 @@ function RiskGauge({ score, band }) {
 }
 
 function RiskChart({ history=[], events=[], entrySpot=null }) {
-  const validHistory = history.filter(x => x.spot != null)
   const entryRisk = Number(history[0]?.risk_score) || 0
-  const scores = history.map(x => Number(x.risk_score) || 0)
-  const changes = history.map(x => x.spot != null && entrySpot ? ((x.spot / entrySpot) - 1) * 100 : null)
+  const spotValues = history.map(x => x.spot).filter(v => v != null).map(Number)
 
   if (!history.length) {
     return <div className="chart-empty"><strong>Waiting for first risk snapshot</strong><span>The risk engine will plot the strategy once live market data is available.</span></div>
   }
 
-  const width = 980, height = 300, pad = 48
-  const riskDelta = scores.map(v => v - entryRisk)
-  const maxAbs = Math.max(5, ...riskDelta.map(Math.abs), ...changes.filter(v => v != null).map(Math.abs))
-  const x = i => pad + i * (width - pad * 2) / Math.max(1, history.length - 1)
-  const y = v => height / 2 - (v / maxAbs) * (height / 2 - pad)
-  const points = arr => arr.map((v,i) => v == null ? '' : `${x(i)},${y(v)}`).filter(Boolean).join(' ')
-  const nearestIndex = ts => {
-    let best = 0, diff = Infinity
-    history.forEach((h,i) => { const d = Math.abs(new Date(h.timestamp) - new Date(ts)); if (d < diff) { diff = d; best = i } })
-    return best
-  }
+  const width = 980
+  const riskHeight = 230
+  const spotHeight = 230
+  const left = 64
+  const right = 20
+  const top = 24
+  const bottom = 32
+  const chartWidth = width - left - right
+  const x = i => left + i * chartWidth / Math.max(1, history.length - 1)
+  const times = history.map(h => new Date(h.timestamp))
+  const timeLabel = d => d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
+  const labelIndexes = Array.from(new Set([0, Math.floor((history.length-1)*0.25), Math.floor((history.length-1)*0.5), Math.floor((history.length-1)*0.75), history.length-1]))
+
+  const riskY = value => riskHeight - bottom - (Math.max(0, Math.min(100, value)) / 100) * (riskHeight - top - bottom)
+  const riskPoints = history.map((h,i) => {
+    const value = Number(h.risk_score)
+    return Number.isFinite(value) ? x(i)+','+riskY(value) : ''
+  }).filter(Boolean).join(' ')
+  const riskTicks = [0,20,40,60,70,80,100]
+
+  const spotMinRaw = spotValues.length ? Math.min(...spotValues) : 0
+  const spotMaxRaw = spotValues.length ? Math.max(...spotValues) : 1
+  const spotPadding = Math.max(1, (spotMaxRaw - spotMinRaw) * 0.12)
+  const spotMin = Math.max(0, spotMinRaw - spotPadding)
+  const spotMax = spotMaxRaw + spotPadding
+  const spotY = value => spotHeight - bottom - ((value - spotMin) / Math.max(0.0001, spotMax - spotMin)) * (spotHeight - top - bottom)
+  const spotPoints = history.map((h,i) => {
+    const value = Number(h.spot)
+    return Number.isFinite(value) ? x(i)+','+spotY(value) : ''
+  }).filter(Boolean).join(' ')
+
+  const formatSpotAxis = value => value >= 1000 ? '₹'+(value/1000).toFixed(2)+'k' : '₹'+value.toFixed(0)
+  const eventIndexes = events.slice(-6).map(e => {
+    let best = 0, bestDiff = Infinity
+    history.forEach((h,i) => {
+      const diff = Math.abs(new Date(h.timestamp) - new Date(e.timestamp))
+      if (diff < bestDiff) { bestDiff = diff; best = i }
+    })
+    return { ...e, index: best }
+  })
 
   return <div className="chart-card">
     <div className="chart-head">
-      <div><div className="section-kicker">TREND</div><h4>Risk movement</h4><p>Relative to the strategy's entry risk. The absolute score is shown above.</p></div>
-      <div className="chart-summary"><span>Entry risk</span><strong>{num(entryRisk,0)}/100</strong><span>Spot change</span><strong>{pct(changes[changes.length - 1])}</strong></div>
+      <div><div className="section-kicker">MARKET TIMELINE</div><h4>Risk & underlying price</h4><p>Time runs left → right. Risk uses a fixed 0–100 scale; underlying price uses ₹ on its own axis.</p></div>
+      <div className="chart-summary">
+        <span>Entry risk</span><strong>{num(entryRisk,0)}/100</strong>
+        <span>Current risk</span><strong>{num(history[history.length-1]?.risk_score,0)}/100</strong>
+        <span>Current spot</span><strong>{spotValues.length ? '₹'+num(spotValues[spotValues.length-1]) : '—'}</strong>
+      </div>
     </div>
-    <svg viewBox={`0 0 ${width} ${height}`} className="risk-chart" role="img" aria-label="Risk movement from strategy entry">
-      <line x1={pad} x2={width-pad} y1={y(maxAbs)} y2={y(maxAbs)} className="chart-grid" />
-      <line x1={pad} x2={width-pad} y1={y(0)} y2={y(0)} className="chart-zero" />
-      <line x1={pad} x2={width-pad} y1={y(-maxAbs)} y2={y(-maxAbs)} className="chart-grid" />
-      {riskDelta.length > 1 && <polyline points={points(riskDelta)} fill="none" className="risk-line" />}
-      {riskDelta.map((v,i) => <circle key={'r'+i} cx={x(i)} cy={y(v)} r={i === riskDelta.length-1 ? 4.5 : 2.2} className="risk-point" />)}
-      {changes.length > 1 && <polyline points={points(changes)} fill="none" className="spot-line" />}
-      <text x={pad+6} y={y(0)-8} className="svg-label">0 at entry</text>
-      <text x={width-pad-115} y={20} className="svg-label">Change from entry</text>
-      {events.slice(-5).map((e,n) => {
-        const i = nearestIndex(e.timestamp)
-        return <g key={e.timestamp+'-'+e.event_type+'-'+n}>
-          <circle cx={x(i)} cy={y(riskDelta[i] || 0)} r="5" className="event-dot" />
-          <text x={x(i)+7} y={y(riskDelta[i] || 0)-10} className="svg-label">{e.event_type.replaceAll('_',' ')}</text>
-        </g>
-      })}
-    </svg>
-    <div className="chart-legend"><span><i className="legend-risk"/> Risk movement</span><span><i className="legend-spot"/> Spot change %</span></div>
+
+    <div className="plot-block">
+      <div className="plot-title"><strong>Risk score</strong><span>0–100</span></div>
+      <svg viewBox={'0 0 '+width+' '+riskHeight} className="risk-chart" role="img" aria-label="Risk score over time">
+        {riskTicks.map(tick => <g key={tick}>
+          <line x1={left} x2={width-right} y1={riskY(tick)} y2={riskY(tick)} className={tick === 0 ? 'chart-zero' : tick === 40 || tick === 70 ? 'risk-threshold' : 'chart-grid'} />
+          <text x={left-10} y={riskY(tick)+4} textAnchor="end" className="axis-label">{tick}</text>
+        </g>)}
+        <polyline points={riskPoints} fill="none" className="risk-line" />
+        {history.map((h,i) => <circle key={'r'+i} cx={x(i)} cy={riskY(Number(h.risk_score)||0)} r={i === history.length-1 ? 4.5 : 2} className="risk-point" />)}
+        <line x1={left} x2={width-right} y1={riskY(entryRisk)} y2={riskY(entryRisk)} className="entry-line" />
+        <text x={left+6} y={riskY(entryRisk)-7} className="entry-label">Entry {num(entryRisk,0)}</text>
+        {eventIndexes.map((e,n) => <circle key={n} cx={x(e.index)} cy={riskY(Number(history[e.index]?.risk_score)||0)} r="5" className="event-dot" />)}
+        {labelIndexes.map(i => <text key={i} x={x(i)} y={riskHeight-8} textAnchor={i===0 ? 'start' : i===history.length-1 ? 'end' : 'middle'} className="axis-label">{timeLabel(times[i])}</text>)}
+      </svg>
+    </div>
+
+    <div className="plot-block">
+      <div className="plot-title"><strong>Underlying LTP / spot</strong><span>{spotValues.length ? formatSpotAxis(spotMin)+' – '+formatSpotAxis(spotMax) : 'Waiting for data'}</span></div>
+      <svg viewBox={'0 0 '+width+' '+spotHeight} className="risk-chart" role="img" aria-label="Underlying spot price over time">
+        {spotValues.length ? [0,.25,.5,.75,1].map((ratio,n) => {
+          const tick = spotMin + (spotMax-spotMin)*ratio
+          return <g key={n}>
+            <line x1={left} x2={width-right} y1={spotY(tick)} y2={spotY(tick)} className="chart-grid" />
+            <text x={left-10} y={spotY(tick)+4} textAnchor="end" className="axis-label">{formatSpotAxis(tick)}</text>
+          </g>
+        }) : null}
+        {entrySpot != null && spotValues.length ? <line x1={left} x2={width-right} y1={spotY(entrySpot)} y2={spotY(entrySpot)} className="entry-line" /> : null}
+        {spotValues.length > 0 && <polyline points={spotPoints} fill="none" className="spot-line" />}
+        {history.map((h,i) => h.spot != null ? <circle key={i} cx={x(i)} cy={spotY(Number(h.spot))} r={i === history.length-1 ? 4.5 : 2} className="spot-point" /> : null)}
+        {entrySpot != null && spotValues.length ? <text x={left+6} y={spotY(entrySpot)-7} className="entry-label">Entry ₹{num(entrySpot)}</text> : null}
+        {labelIndexes.map(i => <text key={i} x={x(i)} y={spotHeight-8} textAnchor={i===0 ? 'start' : i===history.length-1 ? 'end' : 'middle'} className="axis-label">{timeLabel(times[i])}</text>)}
+      </svg>
+    </div>
+
+    <div className="chart-legend"><span><i className="legend-risk"/> Risk score</span><span><i className="legend-spot"/> Underlying LTP</span><span><i className="legend-entry"/> Entry reference</span></div>
   </div>
 }
+
 
 function RiskPanel({ strategy }) {
   const [risk,setRisk] = useState(null)
