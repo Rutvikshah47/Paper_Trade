@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from threading import Event, Thread, RLock
 import time
@@ -273,7 +274,7 @@ def _legacy_entry_spot(db: Session, strategy: Strategy) -> float | None:
         # Upstox daily candle timestamps are returned with an IST offset.
         # Compare the calendar date in the timestamp itself so the current
         # session is excluded even when Railway is running in another timezone.
-        today_str = datetime.now(timezone.utc).astimezone().date().isoformat()
+        today_str = datetime.now(ZoneInfo('Asia/Kolkata')).date().isoformat()
         trading_candles = [
             x for x in candles
             if str(x.get('timestamp', ''))[:10] < today_str
