@@ -211,13 +211,13 @@ function RiskTimeline({history=[],events=[],entrySpot=null}) {
   </section>
 }
 
-function StrategyWorkspace({strategy,risk,onAction,onClose}) {
+function StrategyWorkspace({strategy,risk,onAction,onDelete,onClose}) {
   const band=String(risk?.risk_band||'NORMAL').toLowerCase()
   return <div className="modal-backdrop" onClick={onClose}>
     <div className="workspace-modal" onClick={e=>e.stopPropagation()}>
       <div className="workspace-top">
         <div><div className="section-kicker">STRATEGY #{strategy.id}</div><h2>{strategy.name}</h2><p>{strategy.description||'Multi-leg paper strategy'} · Monitoring only</p><div className="hero-tags"><StatusPill band={risk?.risk_band}/><span className="data-chip">{risk?.entry_spot_source||'Underlying entry reference'}</span></div></div>
-        <div className="workspace-top-right"><div className="workspace-score"><span>Current risk</span><strong>{num(risk?.risk_score,0)}<small>/100</small></strong></div><button className="modal-close" onClick={onClose}>×</button></div>
+        <div className="workspace-top-right"><div className="workspace-score"><span>Current risk</span><strong>{num(risk?.risk_score,0)}<small>/100</small></strong></div><button className="danger modal-delete" onClick={()=>onDelete(strategy.id)}>Delete</button><button className="modal-close" onClick={onClose}>×</button></div>
       </div>
 
       <div className="workspace-body">
@@ -358,7 +358,7 @@ function App(){
 
     <footer className="page-footer"><span>Paper trading only · no real orders are placed</span><span>Risk score is a monitoring model, not a loss probability</span></footer>
 
-    {selectedStrategy&&selectedRisk?<StrategyWorkspace strategy={selectedStrategy} risk={selectedRisk} onAction={strategyAction} onClose={()=>setSelectedId(null)}/>:null}
+    {selectedStrategy&&selectedRisk?<StrategyWorkspace strategy={selectedStrategy} risk={selectedRisk} onAction={strategyAction} onDelete={deleteStrategy} onClose={()=>setSelectedId(null)}/>:null}
     {showCreate?<CreateStrategyModal onCreated={createStrategy} onClose={()=>setShowCreate(false)}/>:null}
   </div>
 }
