@@ -173,7 +173,7 @@ function RiskPanel({ strategy }) {
       {technical.length ? <div className="tech-grid">
         {technical.map(([key,value]) => <div className="tech-card" key={key}>
           <div><span>{key.replaceAll('_',' ')}</span><InfoTip text={TECH_META[key] || 'Technical market context.'}/></div>
-          <strong>{value == null ? '—' : key === 'volume_ratio' ? num(value,2)+'×' : key.includes('pct') || key === 'rsi' || key === 'adx' ? num(value,1)+'%' : key === 'atr' || key === 'vwap' ? '₹'+num(value,2) : num(value,2)}</strong>
+          <strong>{value == null ? '—' : key === 'volume_ratio' ? num(value,2)+'×' : key.includes('pct') ? num(value,1)+'%' : key === 'atr' || key === 'vwap' ? '₹'+num(value,2) : num(value,1)}</strong>
         </div>)}
       </div> : <div className="empty-state"><strong>Technical context is still building</strong><span>The service is waiting for historical or live underlying bars. Risk still uses the available option data.</span></div>}
     </div>
