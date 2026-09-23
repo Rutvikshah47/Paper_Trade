@@ -89,11 +89,17 @@ def technical_metrics(closes, volumes=None, highs=None, lows=None):
     metrics['atr'] = atr
     metrics['atr_pct'] = atr / closes[-1] * 100 if atr is not None and closes[-1] else None
     if volumes and len(volumes) >= 10:
-        current = volumes[-1]
-        avg = mean(volumes[-11:-1])
-        metrics['volume_ratio'] = current / avg if avg else None
-        total_volume = sum(volumes[-20:])
-        metrics['vwap'] = sum(c*v for c, v in zip(closes[-20:], volumes[-20:])) / total_volume if total_volume else None
+        valid = [float(v) for v in volumes if v is not None]
+        if len(valid) >= 10:
+            current = valid[-1]
+            avg = mean(valid[-11:-1])
+            metrics['volume_ratio'] = current / avg if avg else None
+            pairs = [(c, float(v)) for c, v in zip(closes[-20:], volumes[-20:]) if v is not None]
+            total_volume = sum(v for _, v in pairs)
+            metrics['vwap'] = sum(c*v for c, v in pairs) / total_volume if total_volume else None
+        else:
+            metrics['volume_ratio'] = None
+            metrics['vwap'] = None
     metrics['momentum_pct'] = ((closes[-1] / closes[-6]) - 1) * 100 if len(closes) >= 6 and closes[-6] else None
     return metrics
 
