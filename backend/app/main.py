@@ -2,12 +2,13 @@ from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from threading import Event, Thread, RLock
+import asyncio
 import time
 from typing import Any
 import json
 from types import SimpleNamespace
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, joinedload
@@ -48,6 +49,8 @@ _risk_thread: Thread | None = None
 _current_bars: dict[str, dict[str, Any]] = {}
 _daily_technical_cache: dict[str, tuple[float, list[SimpleNamespace]]] = {}
 _intraday_technical_cache: dict[str, tuple[float, list[SimpleNamespace]]] = {}
+_ws_clients: set[tuple[asyncio.AbstractEventLoop, asyncio.Queue]] = set()
+_ws_lock = RLock()
 DAILY_TECHNICAL_CACHE_TTL = 300.0
 INTRADAY_TECHNICAL_CACHE_TTL = 30.0
 
@@ -74,8 +77,31 @@ def _ensure_underlying(symbol: str) -> str | None:
         return None
 
 
+def _broadcast_live_update(key: str, ltp: float) -> None:
+    """Push each received market tick to connected dashboard clients."""
+    payload = {
+        'type': 'market_tick',
+        'key': key,
+        'ltp': ltp,
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+    }
+    with _ws_lock:
+        clients = list(_ws_clients)
+    stale = []
+    for loop, queue in clients:
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, payload)
+        except Exception:
+            stale.append((loop, queue))
+    if stale:
+        with _ws_lock:
+            for client in stale:
+                _ws_clients.discard(client)
+
+
 def _on_market_tick(key: str, ltp: float) -> None:
     alerts.on_market_tick(key, ltp)
+    _broadcast_live_update(key, ltp)
     with _tick_lock:
         symbol = next((s for s, k in _underlying_keys.items() if k == key), None)
         if not symbol:
@@ -106,6 +132,29 @@ def _on_market_tick(key: str, ltp: float) -> None:
 
 
 market.set_callback(_on_market_tick)
+
+
+@app.websocket("/api/stream")
+async def market_stream(websocket: WebSocket):
+    await websocket.accept()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+    loop = asyncio.get_running_loop()
+    client = (loop, queue)
+    with _ws_lock:
+        _ws_clients.add(client)
+    try:
+        await websocket.send_json({
+            'type': 'stream_connected',
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        })
+        while True:
+            payload = await queue.get()
+            await websocket.send_json(payload)
+    except (WebSocketDisconnect, asyncio.CancelledError):
+        pass
+    finally:
+        with _ws_lock:
+            _ws_clients.discard(client)
 
 
 def _risk_bars(db: Session, symbol: str, underlying_key: str | None) -> tuple[list[Any], str]:
