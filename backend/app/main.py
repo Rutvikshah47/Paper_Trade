@@ -111,7 +111,7 @@ def _risk_bars(db: Session, symbol: str, underlying_key: str | None) -> tuple[li
     bars = db.query(MarketBar).filter(
         MarketBar.symbol == symbol
     ).order_by(MarketBar.timestamp.desc()).limit(120).all()[::-1]
-    if len(bars) >= 15 or not underlying_key or settings.use_mock_market_data:
+    if len(bars) >= 30 or not underlying_key or settings.use_mock_market_data:
         return bars, '1-minute intraday'
 
     now = time.monotonic()
