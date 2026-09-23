@@ -78,3 +78,15 @@ class MarketBar(Base):
     low: Mapped[float] = mapped_column(Float, nullable=False)
     close: Mapped[float] = mapped_column(Float, nullable=False)
     volume: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class StrategyEvent(Base):
+    __tablename__ = "strategy_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    strategy_id: Mapped[int] = mapped_column(ForeignKey("strategies.id", ondelete="CASCADE"), nullable=False, index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    spot: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    message: Mapped[str] = mapped_column(String(500), default="")
+    metadata_json: Mapped[str | None] = mapped_column(String(4000), nullable=True)
