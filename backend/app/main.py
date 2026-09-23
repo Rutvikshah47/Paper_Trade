@@ -47,7 +47,9 @@ _running = Event()
 _risk_thread: Thread | None = None
 _current_bars: dict[str, dict[str, Any]] = {}
 _daily_technical_cache: dict[str, tuple[float, list[SimpleNamespace]]] = {}
+_intraday_technical_cache: dict[str, tuple[float, list[SimpleNamespace]]] = {}
 DAILY_TECHNICAL_CACHE_TTL = 300.0
+INTRADAY_TECHNICAL_CACHE_TTL = 30.0
 
 # Cutover for the new entry-baseline behavior. Strategies created before this
 # timestamp are legacy strategies; their underlying entry baseline is backfilled
@@ -107,35 +109,69 @@ market.set_callback(_on_market_tick)
 
 
 def _risk_bars(db: Session, symbol: str, underlying_key: str | None) -> tuple[list[Any], str]:
-    """Load enough bars for technical indicators without hammering Upstox."""
-    bars = db.query(MarketBar).filter(
-        MarketBar.symbol == symbol
-    ).order_by(MarketBar.timestamp.desc()).limit(120).all()[::-1]
-    if len(bars) >= 30 or not underlying_key or settings.use_mock_market_data:
+    """Load technically meaningful bars with a short Upstox cache.
+
+    Priority:
+    1. Current-session Upstox 1-minute candles (best source for live technicals).
+    2. Locally persisted 1-minute candles.
+    3. Long daily history as a warm-up for RSI/ADX/ATR before intraday data
+       is sufficient.
+    """
+    if not underlying_key or settings.use_mock_market_data:
+        bars = db.query(MarketBar).filter(
+            MarketBar.symbol == symbol
+        ).order_by(MarketBar.timestamp.desc()).limit(120).all()[::-1]
         return bars, '1-minute intraday'
 
     now = time.monotonic()
-    cached = _daily_technical_cache.get(symbol)
-    if cached and now - cached[0] < DAILY_TECHNICAL_CACHE_TTL:
-        return cached[1], 'Daily historical context'
+    cached = _intraday_technical_cache.get(symbol)
+    if cached and now - cached[0] < INTRADAY_TECHNICAL_CACHE_TTL and len(cached[1]) >= 1:
+        return cached[1], 'Upstox 1-minute intraday'
 
     try:
-        # Use a long warm-up window for Wilder RSI/ADX/ATR calculations.
-        candles = resolver.get_historical_daily_closes(underlying_key, sessions=250)
-        daily = [
+        candles = resolver.get_intraday_1m_bars(underlying_key)
+        intraday = [
             SimpleNamespace(
                 timestamp=x.get('timestamp'), open=x.get('open'), high=x.get('high'),
                 low=x.get('low'), close=x.get('close'), volume=x.get('volume'),
             )
             for x in candles if x.get('close') is not None
         ]
-        # Technical indicators must consume bars oldest -> newest.
+        intraday.sort(key=lambda x: str(x.timestamp or ''))
+        if intraday:
+            _intraday_technical_cache[symbol] = (now, intraday)
+            if len(intraday) >= 30:
+                return intraday, 'Upstox 1-minute intraday'
+    except Exception as exc:
+        print(f'[Risk] Intraday technical fetch failed for {symbol}: {exc}')
+
+    # Keep using locally persisted 1-minute bars if they are available.
+    bars = db.query(MarketBar).filter(
+        MarketBar.symbol == symbol
+    ).order_by(MarketBar.timestamp.desc()).limit(120).all()[::-1]
+    if len(bars) >= 30:
+        return bars, 'Local 1-minute intraday'
+
+    cached_daily = _daily_technical_cache.get(symbol)
+    if cached_daily and now - cached_daily[0] < DAILY_TECHNICAL_CACHE_TTL:
+        return cached_daily[1], 'Daily historical warm-up'
+
+    try:
+        # Use enough history for Wilder RSI/ADX/ATR warm-up.
+        daily_candles = resolver.get_historical_daily_closes(underlying_key, sessions=250)
+        daily = [
+            SimpleNamespace(
+                timestamp=x.get('timestamp'), open=x.get('open'), high=x.get('high'),
+                low=x.get('low'), close=x.get('close'), volume=x.get('volume'),
+            )
+            for x in daily_candles if x.get('close') is not None
+        ]
         daily.sort(key=lambda x: str(x.timestamp or ''))
         _daily_technical_cache[symbol] = (now, daily)
-        return daily, 'Daily historical context'
+        return daily, 'Daily historical warm-up'
     except Exception as exc:
         print(f'[Risk] Technical history fetch failed for {symbol}: {exc}')
-        return bars, 'Building intraday history'
+        return bars, 'Building technical history'
 
 
 def _wait_for_live_ltps(keys: list[str], timeout: float = 4.0) -> dict[str, float]:
