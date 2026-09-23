@@ -25,7 +25,10 @@ const TECH_META = {
   atr_pct: 'ATR expressed as a percentage of the underlying price.',
   vwap: 'Volume-weighted average price calculated from the available technical bars.',
   volume_ratio: 'Latest volume divided by the recent average volume. Values above 1 indicate higher-than-average participation.',
-  momentum_pct: 'Percentage price change over the recent technical lookback window.',
+  momentum_pct: 'Five-bar percentage price change over the current technical data set.',
+  plus_di: 'Plus Directional Indicator. Measures positive directional movement relative to smoothed True Range.',
+  minus_di: 'Minus Directional Indicator. Measures negative directional movement relative to smoothed True Range.',
+  rolling_vwap_20: 'Twenty-bar rolling volume-weighted price proxy used only when daily history is being used. Traditional session VWAP is intraday and resets each session.',
 }
 
 function InfoTip({ text }) {
@@ -173,7 +176,7 @@ function RiskPanel({ strategy }) {
       {technical.length ? <div className="tech-grid">
         {technical.map(([key,value]) => <div className="tech-card" key={key}>
           <div><span>{key.replaceAll('_',' ')}</span><InfoTip text={TECH_META[key] || 'Technical market context.'}/></div>
-          <strong>{value == null ? '—' : key === 'volume_ratio' ? num(value,2)+'×' : key.includes('pct') ? num(value,1)+'%' : key === 'atr' || key === 'vwap' ? '₹'+num(value,2) : num(value,1)}</strong>
+          <strong>{value == null ? '—' : key === 'volume_ratio' ? num(value,2)+'×' : key.includes('pct') || key === 'plus_di' || key === 'minus_di' ? num(value,1)+'%' : key === 'atr' || key === 'vwap' || key === 'rolling_vwap_20' ? '₹'+num(value,2) : num(value,1)}</strong>
         </div>)}
       </div> : <div className="empty-state"><strong>Technical context is still building</strong><span>The service is waiting for historical or live underlying bars. Risk still uses the available option data.</span></div>}
     </div>
