@@ -98,6 +98,37 @@ class UpstoxInstrumentResolver:
                 "volume": float(candle[5]) if len(candle) > 5 and candle[5] is not None else None,
             })
         return result
+    def get_intraday_1m_bars(self, instrument_key: str) -> list[dict[str, Any]]:
+        """Return current-session 1-minute OHLCV candles."""
+        encoded = requests.utils.quote(instrument_key, safe="")
+        url = f"https://api.upstox.com/v3/historical-candle/intraday/{encoded}/minutes/1"
+        if not self.access_token:
+            raise InstrumentResolutionError("UPSTOX_ACCESS_TOKEN is not configured")
+        headers = {"Accept": "application/json", "Authorization": f"Bearer {self.access_token}"}
+        try:
+            response = requests.get(url, headers=headers, timeout=15, verify=self.verify_ssl)
+            response.raise_for_status()
+            payload = response.json()
+        except requests.RequestException as exc:
+            raise InstrumentResolutionError(f"Upstox intraday request failed: {exc}") from exc
+        except ValueError as exc:
+            raise InstrumentResolutionError("Upstox returned invalid intraday JSON") from exc
+
+        candles = payload.get("data", {}).get("candles", [])
+        result = []
+        for candle in candles:
+            if len(candle) < 5:
+                continue
+            result.append({
+                "timestamp": candle[0],
+                "open": float(candle[1]),
+                "high": float(candle[2]),
+                "low": float(candle[3]),
+                "close": float(candle[4]),
+                "volume": float(candle[5]) if len(candle) > 5 and candle[5] is not None else None,
+            })
+        return result
+
     def get_option_contracts(
         self,
         symbol: str,
