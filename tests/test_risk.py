@@ -65,3 +65,15 @@ def test_threat_range_helpers_are_derived_from_expected_move():
     assert _threat_states(strategy, {"spot": 109.0, "expected_move": 2.0}) == (False, False, False, False)
     assert _threat_states(strategy, {"spot": 108.5, "expected_move": 2.0}) == (True, False, False, False)
     assert _threat_states(strategy, {"spot": 110.0, "expected_move": 2.0}) == (True, False, True, False)
+
+
+def test_settings_exposes_cors_origins(monkeypatch):
+    monkeypatch.setenv("CORS_ORIGINS", "https://example.vercel.app, http://localhost:5173")
+    from backend.app.config import Settings
+    settings = Settings()
+    assert settings.cors_origins == ["https://example.vercel.app", "http://localhost:5173"]
+
+
+def test_application_import_smoke():
+    from backend.app.main import app
+    assert app.title == "Paper Trader"
