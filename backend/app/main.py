@@ -385,7 +385,8 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         if order.entry_price == 0:
             live=live_prices.get(order.instrument_key)
             if live is None:
-                db.rollback()
+                db.delete(strategy)
+                db.commit()
                 raise HTTPException(409, f'Live LTP unavailable for {order.trading_symbol or order.symbol}. Please connect the market feed and try again.')
             order.entry_price=live
             order.current_ltp=live
