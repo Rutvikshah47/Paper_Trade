@@ -11,3 +11,31 @@
 .risk-chart{background:#fff}.grid-critical{stroke:#ef4444;stroke-dasharray:6 6;opacity:.5}.grid-warning{stroke:#f59e0b;stroke-dasharray:6 6;opacity:.55}.grid-zero{stroke:#98a2b3;stroke-dasharray:3 5;opacity:.7}.risk-line{stroke:#2563eb;stroke-width:3}.spot-line{stroke:#7c3aed;stroke-width:2;stroke-dasharray:5 5}.event-dot{fill:#111827}
 .event-list{max-height:86px;overflow:auto}.event-list span{background:#f8fafc}
 @media(max-width:900px){.risk-grid,.component-grid{grid-template-columns:1fr 1fr}.risk-grid .primary-metric{grid-column:1/-1}}
+
+
+/* Risk terminal clarity v3 */
+.risk-panel{box-shadow:0 8px 28px rgba(16,24,40,.06)}
+.current-spot-card{background:#eef5ff!important;border-color:#cbdcff!important}
+.entry-spot-card{background:#f8fafc!important;border-color:#dfe5ee!important}
+.current-spot-card strong{font-size:26px!important;color:#155eef}
+.entry-spot-card strong{font-size:24px!important;color:#344054}
+.risk-grid .risk-card small{display:block;margin-top:7px;line-height:1.35}
+.chart-heading{padding:2px 2px 10px;border-bottom:1px solid #edf0f5}
+.chart-heading>div:first-child strong{font-size:14px}
+.chart-entry{display:flex;flex-direction:column;align-items:flex-end;gap:2px;padding:7px 10px;background:#f8fafc;border:1px solid #e4e9f1;border-radius:8px}
+.chart-entry span{text-transform:uppercase;letter-spacing:.45px;font-size:9px;color:#8a95a8}
+.chart-entry b{margin-left:0!important;font-size:14px!important}
+.risk-section-title strong{font-size:14px}
+.risk-section-title span{font-size:10px}
+.greek-grid .metric{padding:14px;background:#fff}
+.greek-grid .metric strong{font-size:20px}
+.component-grid{gap:10px}
+.component{background:#fff;border:1px solid #e8edf4;border-radius:10px;padding:11px}
+.tech-row{margin:10px 0 2px}
+.tech-row span{background:#fff;padding:7px 9px}
+.event-list{border-top:1px solid #edf0f5;padding-top:9px}
+.event-list span{background:#fff}
+.risk-foot{padding:11px 12px;background:#f8fafc;border:1px solid #e7ebf2;border-radius:8px;line-height:1.5}
+@media(max-width:900px){
+  .risk-grid .primary-metric,.risk-grid .entry-spot-card{grid-column:auto}
+}
