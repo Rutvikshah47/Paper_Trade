@@ -13,6 +13,7 @@ class MarketDataService:
         self.verify_ssl = verify_ssl
         self._ltps: dict[str, float] = {}
         self._volumes: dict[str, float] = {}
+        self._underlier_ltps: dict[str, float] = {}
         self._lock = threading.RLock()
         self._subscribed: set[str] = set()
         self._running = False
@@ -32,6 +33,10 @@ class MarketDataService:
     def get_volumes(self) -> dict[str, float]:
         with self._lock:
             return dict(self._volumes)
+
+    def get_underlier_ltps(self) -> dict[str, float]:
+        with self._lock:
+            return dict(self._underlier_ltps)
 
     def subscribed_keys(self) -> list[str]:
         with self._lock:
@@ -136,6 +141,10 @@ class MarketDataService:
                                 market_ff = feed
 
                             ltpc = market_ff.get("ltpc") if isinstance(market_ff, dict) else None
+                            option_greeks = market_ff.get("optionGreeks") if isinstance(market_ff, dict) else None
+                            underlier = None
+                            if isinstance(option_greeks, dict) and option_greeks.get("up") is not None:
+                                underlier = float(option_greeks["up"])
                             if isinstance(ltpc, dict) and ltpc.get("ltp") is not None:
                                 value = float(ltpc["ltp"])
                                 volume = None
@@ -152,6 +161,8 @@ class MarketDataService:
                                     self._ltps[key] = value
                                     if volume is not None:
                                         self._volumes[key] = volume
+                                    if underlier is not None:
+                                        self._underlier_ltps[key] = underlier
                                 self._emit(key, value)
                     except Exception as exc:
                         self.last_error = f"Malformed market-data tick: {exc}"
