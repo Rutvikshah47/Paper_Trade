@@ -89,7 +89,14 @@ class UpstoxInstrumentResolver:
         for candle in candles:
             if len(candle) < 5:
                 continue
-            result.append({"timestamp": candle[0], "open": float(candle[1]), "high": float(candle[2]), "low": float(candle[3]), "close": float(candle[4])})
+            result.append({
+                "timestamp": candle[0],
+                "open": float(candle[1]),
+                "high": float(candle[2]),
+                "low": float(candle[3]),
+                "close": float(candle[4]),
+                "volume": float(candle[5]) if len(candle) > 5 and candle[5] is not None else None,
+            })
         return result
     def get_option_contracts(
         self,
