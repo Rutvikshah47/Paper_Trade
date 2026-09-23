@@ -60,3 +60,43 @@ class DashboardView(BaseModel):
     total_pnl: float
     open_orders: int
     market_data_mode: str
+
+
+class RiskSnapshotView(BaseModel):
+    timestamp: datetime
+    spot: float | None
+    risk_score: float
+    risk_band: str
+    pnl: float | None
+    delta: float | None
+    gamma: float | None
+    theta: float | None
+    vega: float | None
+    expected_move: float | None
+    distance_to_short_pct: float | None
+    distance_to_upper_short_pct: float | None = None
+    distance_to_lower_short_pct: float | None = None
+    avg_iv: float | None
+
+
+class RiskView(BaseModel):
+    strategy_id: int
+    spot: float | None
+    entry_spot: float | None
+    spot_change_pct: float | None
+    risk_score: float
+    risk_band: str
+    expected_move: float | None
+    distance_to_short_pct: float | None
+    distance_to_upper_short_pct: float | None = None
+    distance_to_lower_short_pct: float | None = None
+    delta: float | None
+    gamma: float | None
+    theta: float | None
+    vega: float | None
+    avg_iv: float | None
+    technical: dict = Field(default_factory=dict)
+    components: dict = Field(default_factory=dict)
+    legs: list[dict] = Field(default_factory=list)
+    probability: dict | None = None
+    history: list[RiskSnapshotView] = Field(default_factory=list)
