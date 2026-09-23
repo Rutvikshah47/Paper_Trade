@@ -125,7 +125,7 @@ def _risk_bars(db: Session, symbol: str, underlying_key: str | None) -> tuple[li
 
     now = time.monotonic()
     cached = _intraday_technical_cache.get(symbol)
-    if cached and now - cached[0] < INTRADAY_TECHNICAL_CACHE_TTL and len(cached[1]) >= 1:
+    if cached and now - cached[0] < INTRADAY_TECHNICAL_CACHE_TTL and len(cached[1]) >= 30:
         return cached[1], 'Upstox 1-minute intraday'
 
     try:
