@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from backend.app.risk import bs_price, greeks, implied_vol, risk_band, technical_metrics, calculate_strategy_risk
+from backend.app.risk import atr_wilder, bs_price, greeks, implied_vol, risk_band, technical_metrics, calculate_strategy_risk
 
 
 def test_black_scholes_round_trip_iv():
@@ -42,3 +42,26 @@ def test_strategy_risk_expected_move_and_short_distances():
     assert result["gamma"] is not None
     assert result["theta"] is not None
     assert result["vega"] is not None
+
+
+def test_wilder_atr_and_technical_metrics():
+    closes = [100 + i for i in range(20)]
+    highs = [c + 2 for c in closes]
+    lows = [c - 1 for c in closes]
+    atr = atr_wilder(highs, lows, closes, 14)
+    assert atr is not None
+    assert abs(atr - 3.0) < 1e-9
+    metrics = technical_metrics(closes, [100] * len(closes), highs, lows)
+    assert metrics["atr"] == atr
+    assert metrics["atr_pct"] > 0
+
+
+def test_threat_range_helpers_are_derived_from_expected_move():
+    from backend.app.main import _threat_states
+    strategy = SimpleNamespace(orders=[
+        SimpleNamespace(status="OPEN", side="SELL", option_type="CE", strike=110.0),
+        SimpleNamespace(status="OPEN", side="SELL", option_type="PE", strike=90.0),
+    ])
+    assert _threat_states(strategy, {"spot": 109.0, "expected_move": 2.0}) == (False, False, False, False)
+    assert _threat_states(strategy, {"spot": 108.5, "expected_move": 2.0}) == (True, False, False, False)
+    assert _threat_states(strategy, {"spot": 110.0, "expected_move": 2.0}) == (True, False, True, False)
