@@ -321,7 +321,7 @@ function App(){
   return <div className="terminal-app">
     <header className="terminal-header">
       <div className="header-inner">
-        <div className="brand-block"><div className="brand-mark">S</div><div><div className="brand-name">StrikeWatch</div><span>Options paper trading & risk dashboard</span></div></div>
+        <div className="brand-block"><div className="brand-mark">S</div><div><div className="brand-name">Paper Trader</div><span>Options paper trading & risk dashboard</span></div></div>
         <div className="header-tickers">
           {selectedStrategy?.orders[0]?<><div className="ticker"><span>{selectedStrategy.orders[0].symbol}</span><strong>{risk?.spot==null?'—':'₹'+num(risk.spot)}</strong><small>{risk?.spot_change_pct==null?'—':pct(risk.spot_change_pct)}</small></div><div className="ticker"><span>Risk</span><strong>{risk?.risk_score==null?'—':num(risk.risk_score,0)+'/100'}</strong><small>{risk?.risk_band||'—'}</small></div><div className="ticker"><span>IV</span><strong>{risk?.avg_iv==null?'—':num(risk.avg_iv*100,1)+'%'}</strong><small>avg IV</small></div><div className="ticker"><span>P&L</span><strong className={selectedStrategy.pnl>=0?'value-positive':'value-negative'}>{money(selectedStrategy.pnl)}</strong><small>paper</small></div></>:<div className="ticker"><span>Market feed</span><strong>{dashboard.market_data_mode.toUpperCase()}</strong><small>{market.subscribed.length} instruments</small></div>}
         </div>
