@@ -3,12 +3,12 @@ import { createRoot } from 'react-dom/client'
 import './style.css'
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
-const apiUrl = path => \`\${API_BASE_URL}\${path}\`
+const apiUrl = path => `${API_BASE_URL}${path}`
 
 const emptyOrder = () => ({ symbol:'', expiry:'', strike:'', option_type:'CE', side:'SELL', entry_price:'', lots:1 })
-const money = value => value === null || value === undefined ? '—' : \`\${value >= 0 ? '+' : '-'}₹\${Math.abs(value).toFixed(2)}\`
+const money = value => value === null || value === undefined ? '—' : `${value >= 0 ? '+' : '-'}₹${Math.abs(value).toFixed(2)}`
 const num = (value, digits=2) => value === null || value === undefined ? '—' : Number(value).toFixed(digits)
-const pct = value => value === null || value === undefined ? '—' : \`\${value >= 0 ? '+' : ''}\${Number(value).toFixed(2)}%\`
+const pct = value => value === null || value === undefined ? '—' : `${value >= 0 ? '+' : ''}${Number(value).toFixed(2)}%`
 
 const RISK_META = {
   distance: 'Distance to the nearest short strike. Smaller distance means less price cushion before the short option is threatened.',
@@ -59,7 +59,7 @@ function RiskChart({ history=[], events=[], entrySpot=null }) {
   const maxAbs = Math.max(5, ...riskDelta.map(Math.abs), ...changes.filter(v => v != null).map(Math.abs))
   const x = i => pad + i * (width - pad * 2) / Math.max(1, history.length - 1)
   const y = v => height / 2 - (v / maxAbs) * (height / 2 - pad)
-  const points = arr => arr.map((v,i) => v == null ? '' : \`\${x(i)},\${y(v)}\`).filter(Boolean).join(' ')
+  const points = arr => arr.map((v,i) => v == null ? '' : `${x(i)},${y(v)}`).filter(Boolean).join(' ')
   const nearestIndex = ts => {
     let best = 0, diff = Infinity
     history.forEach((h,i) => { const d = Math.abs(new Date(h.timestamp) - new Date(ts)); if (d < diff) { diff = d; best = i } })
@@ -71,7 +71,7 @@ function RiskChart({ history=[], events=[], entrySpot=null }) {
       <div><div className="section-kicker">TREND</div><h4>Risk movement</h4><p>Relative to the strategy's entry risk. The absolute score is shown above.</p></div>
       <div className="chart-summary"><span>Entry risk</span><strong>{num(entryRisk,0)}/100</strong><span>Spot change</span><strong>{pct(changes[changes.length - 1])}</strong></div>
     </div>
-    <svg viewBox={\`0 0 \${width} \${height}\`} className="risk-chart" role="img" aria-label="Risk movement from strategy entry">
+    <svg viewBox={`0 0 ${width} ${height}`} className="risk-chart" role="img" aria-label="Risk movement from strategy entry">
       <line x1={pad} x2={width-pad} y1={y(maxAbs)} y2={y(maxAbs)} className="chart-grid" />
       <line x1={pad} x2={width-pad} y1={y(0)} y2={y(0)} className="chart-zero" />
       <line x1={pad} x2={width-pad} y1={y(-maxAbs)} y2={y(-maxAbs)} className="chart-grid" />
@@ -246,7 +246,7 @@ function App() {
       const normalized = orders.map(o => ({...o,strike:Number(o.strike),entry_price:Number(o.entry_price),lots:Number(o.lots)}))
       const r = await fetch(apiUrl('/api/strategies'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,description,orders:normalized})})
       const b=await r.json(); if(!r.ok) throw new Error(b.detail||'Failed')
-      setName('');setDescription('');setOrders([emptyOrder()]);setMessage(\`Created paper strategy #\${b.id}\`);await refresh()
+      setName('');setDescription('');setOrders([emptyOrder()]);setMessage(`Created paper strategy #${b.id}`);await refresh()
     } catch(e){setMessage(e.message)} finally{setLoading(false)}
   }
 
@@ -255,16 +255,16 @@ function App() {
     try {
       const r=await fetch(apiUrl('/api/market/connect'),{method:'POST'}); const b=await r.json()
       if(!r.ok) throw new Error(b.detail||'Market connection failed')
-      setMessage(b.message || \`Feed refreshed · \${b.subscribed} option instruments\`); await refresh()
+      setMessage(b.message || `Feed refreshed · ${b.subscribed} option instruments`); await refresh()
     } catch(e){setMessage(e.message)} finally{setConnecting(false)}
   }
 
-  const deleteStrategy = async id => { if(!window.confirm('Delete this paper strategy and its risk history?')) return; const r=await fetch(apiUrl(\`/api/strategies/\${id}\`),{method:'DELETE'}); if(r.ok) refresh() }
+  const deleteStrategy = async id => { if(!window.confirm('Delete this paper strategy and its risk history?')) return; const r=await fetch(apiUrl(`/api/strategies/${id}`),{method:'DELETE'}); if(r.ok) refresh() }
   const strategyAction = async (id,action,orderId) => {
     const confirmText = action === 'exit' ? 'Exit this paper strategy?' : 'Close this paper leg?'
     if(!window.confirm(confirmText)) return
     const path=action==='exit'?'/exit':'/adjust'; const body=action==='exit'?{reason:'Manual paper exit'}:{action:'CLOSE_LEG',order_id:orderId,reason:'Manual paper adjustment'}
-    const r=await fetch(apiUrl(\`/api/strategies/\${id}\${path}\`),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    const r=await fetch(apiUrl(`/api/strategies/${id}${path}`),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     if(!r.ok){const b=await r.json();setMessage(b.detail||'Action failed');return}; await refresh()
   }
 
