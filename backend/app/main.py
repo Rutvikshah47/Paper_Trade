@@ -87,10 +87,22 @@ def _broadcast_live_update(key: str, ltp: float) -> None:
     }
     with _ws_lock:
         clients = list(_ws_clients)
+    def enqueue(queue, item):
+        try:
+            queue.put_nowait(item)
+        except asyncio.QueueFull:
+            # Drop the oldest queued tick rather than blocking the market-data
+            # thread when a browser is temporarily slow.
+            try:
+                queue.get_nowait()
+                queue.put_nowait(item)
+            except Exception:
+                pass
+
     stale = []
     for loop, queue in clients:
         try:
-            loop.call_soon_threadsafe(queue.put_nowait, payload)
+            loop.call_soon_threadsafe(enqueue, queue, payload)
         except Exception:
             stale.append((loop, queue))
     if stale:
