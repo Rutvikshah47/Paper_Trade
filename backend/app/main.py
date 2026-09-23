@@ -232,6 +232,8 @@ def _legacy_entry_spot(db: Session, strategy: Strategy) -> float | None:
         created_at = created_at.replace(tzinfo=None)
     if created_at is not None and created_at >= LEGACY_ENTRY_CUTOFF:
         return entry.spot
+    if 'Legacy entry spot backfilled from N-2 trading-day close' in (entry.message or ''):
+        return entry.spot
 
     symbol = strategy.orders[0].symbol if strategy.orders else None
     if not symbol:
