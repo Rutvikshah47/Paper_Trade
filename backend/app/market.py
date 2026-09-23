@@ -5,7 +5,7 @@ from typing import Callable
 
 
 class MarketDataService:
-    """Thread-safe live LTP cache backed by Upstox Market Data Feed V3."""
+    """Thread-safe live market cache backed by Upstox Market Data Feed V3."""
 
     def __init__(self, use_mock: bool, access_token: str, verify_ssl: bool):
         self.use_mock = use_mock
@@ -56,7 +56,7 @@ class MarketDataService:
         if self._streamer is not None and self.status == "CONNECTED":
             try:
                 if new_keys:
-                    self._streamer.subscribe(sorted(new_keys), "ltpc")
+                    self._streamer.subscribe(sorted(new_keys), "full")
                 return
             except Exception as exc:
                 self.last_error = str(exc)
@@ -105,14 +105,14 @@ class MarketDataService:
                 configuration = upstox_client.Configuration()
                 configuration.access_token = self.access_token
                 api_client = upstox_client.ApiClient(configuration)
-                streamer = upstox_client.MarketDataStreamerV3(api_client, [], "ltpc")
+                streamer = upstox_client.MarketDataStreamerV3(api_client, [], "full")
                 self._streamer = streamer
 
                 def on_open(*_args):
                     with self._lock:
                         keys = sorted(self._subscribed)
                     if keys:
-                        streamer.subscribe(keys, "ltpc")
+                        streamer.subscribe(keys, "full")
                     self.status = "CONNECTED"
                     self.last_error = None
 
@@ -124,18 +124,34 @@ class MarketDataService:
                         for key, feed in feeds.items():
                             if not isinstance(feed, dict):
                                 continue
-                            ltpc = feed.get("ltpc")
-                            if not isinstance(ltpc, dict):
-                                full = feed.get("fullFeed", {})
+                            market_ff = None
+                            ff = feed.get("ff")
+                            if isinstance(ff, dict):
+                                market_ff = ff.get("marketFF")
+                            if not isinstance(market_ff, dict):
+                                full = feed.get("fullFeed")
                                 if isinstance(full, dict):
-                                    market_ff = full.get("marketFF", {})
-                                    ltpc = market_ff.get("ltpc") if isinstance(market_ff, dict) else None
+                                    market_ff = full.get("marketFF")
+                            if not isinstance(market_ff, dict):
+                                market_ff = feed
+
+                            ltpc = market_ff.get("ltpc") if isinstance(market_ff, dict) else None
                             if isinstance(ltpc, dict) and ltpc.get("ltp") is not None:
                                 value = float(ltpc["ltp"])
+                                volume = None
+                                ohlc = market_ff.get("marketOHLC", {}).get("ohlc", []) if isinstance(market_ff.get("marketOHLC"), dict) else []
+                                if isinstance(ohlc, list):
+                                    for bar in ohlc:
+                                        if isinstance(bar, dict) and bar.get("interval") == "I1" and bar.get("vol") is not None:
+                                            volume = float(bar["vol"])
+                                if volume is None:
+                                    details = market_ff.get("eFeedDetails")
+                                    if isinstance(details, dict) and details.get("vtt") is not None:
+                                        volume = float(details["vtt"])
                                 with self._lock:
                                     self._ltps[key] = value
-                                    if ltpc.get("volume") is not None:
-                                        self._volumes[key] = float(ltpc["volume"])
+                                    if volume is not None:
+                                        self._volumes[key] = volume
                                 self._emit(key, value)
                     except Exception as exc:
                         self.last_error = f"Malformed market-data tick: {exc}"
