@@ -240,7 +240,7 @@ function RiskDetails({ strategy, risk, onAction }) {
 
 function StrategyCard({ strategy, selected, onSelect }) {
   return <button className={'strategy-tab '+(selected?'selected':'')} onClick={()=>onSelect(strategy.id)}>
-    <div className="strategy-tab-top"><span>#{strategy.id}</span><StatusPill band={strategy.risk_band || 'NORMAL'}/></div>
+    <div className="strategy-tab-top"><span>#{strategy.id}</span>{selected ? <StatusPill band={strategy.risk_band || 'NORMAL'}/> : <span className="tab-status-neutral">{strategy.status}</span>}</div>
     <strong>{strategy.name}</strong><span>{strategy.orders.length} legs · {money(strategy.pnl)}</span>
   </button>
 }
