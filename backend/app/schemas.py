@@ -103,6 +103,7 @@ class RiskView(BaseModel):
     strategy_id: int
     spot: float | None
     entry_spot: float | None
+    entry_spot_source: str | None = None
     spot_change_pct: float | None
     risk_score: float
     risk_band: str
