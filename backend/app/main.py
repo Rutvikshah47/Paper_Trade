@@ -210,6 +210,49 @@ def _save_event_transitions(db: Session, strategy: Strategy, result: dict[str, A
 
 
 
+def _legacy_entry_spot(db: Session, strategy: Strategy) -> float | None:
+    """Backfill only legacy strategies whose persisted ENTRY spot is missing/zero.
+    Uses the second-most-recent available trading-day close of the underlying.
+    """
+    entry = db.query(StrategyEvent).filter(
+        StrategyEvent.strategy_id == strategy.id, StrategyEvent.event_type == 'ENTRY'
+    ).order_by(StrategyEvent.timestamp.asc()).first()
+    if not entry or (entry.spot is not None and entry.spot > 0):
+        return entry.spot if entry else None
+    symbol = strategy.orders[0].symbol if strategy.orders else None
+    if not symbol:
+        return None
+    try:
+        underlying = _ensure_underlying(symbol)
+        if not underlying:
+            return None
+        candles = resolver.get_historical_daily_closes(underlying, sessions=5)
+        if len(candles) < 2:
+            return None
+        # API returns recent trading sessions; index 1 is the previous trading day.
+        # For the requested temporary fallback we intentionally use the N-2 trading-session close.
+        fallback = candles[1]['close']
+        entry.spot = fallback
+        entry.message = (entry.message or 'Strategy entered paper tracking') + ' · Legacy entry spot backfilled from N-2 trading-day close'
+        snapshot = db.query(RiskSnapshot).filter(
+            RiskSnapshot.strategy_id == strategy.id
+        ).order_by(RiskSnapshot.timestamp.asc()).first()
+        if snapshot and (snapshot.spot is None or snapshot.spot <= 0):
+            snapshot.spot = fallback
+        return fallback
+    except Exception as exc:
+        print(f'[Risk] Legacy entry spot backfill failed for strategy {strategy.id}: {exc}')
+        return None
+
+def _backfill_legacy_entry_spots(db: Session) -> None:
+    rows = db.query(Strategy).options(joinedload(Strategy.orders)).filter(Strategy.status == 'OPEN').all()
+    changed = False
+    for strategy in rows:
+        if _legacy_entry_spot(db, strategy) is not None:
+            changed = True
+    if changed:
+        db.commit()
+
 def _risk_for_strategy(db: Session, strategy: Strategy) -> dict[str, Any]:
     key = _ensure_underlying(strategy.orders[0].symbol) if strategy.orders else None
     ltps = market.get_ltps()
@@ -310,6 +353,7 @@ def startup():
         if keys: market.subscribe(keys)
         for symbol in symbols: _ensure_underlying(symbol)
         if keys or symbols: alerts.start()
+        _backfill_legacy_entry_spots(db)
         _running.set()
         global _risk_thread
         _risk_thread = Thread(target=_risk_loop, daemon=True, name='risk-snapshot-service')
