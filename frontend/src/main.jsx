@@ -49,7 +49,8 @@ function RiskGauge({ score, band }) {
 
 function RiskChart({ history=[], events=[], entrySpot=null }) {
   const entryRisk = Number(history[0]?.risk_score) || 0
-  const spotValues = history.map(x => x.spot).filter(v => v != null).map(Number)
+  const validSpots = history.filter(x => x.spot != null)
+  const spotValues = validSpots.map(x => Number(x.spot))
 
   if (!history.length) {
     return <div className="chart-empty"><strong>Waiting for first risk snapshot</strong><span>The risk engine will plot the strategy once live market data is available.</span></div>
@@ -63,10 +64,25 @@ function RiskChart({ history=[], events=[], entrySpot=null }) {
   const top = 24
   const bottom = 32
   const chartWidth = width - left - right
-  const x = i => left + i * chartWidth / Math.max(1, history.length - 1)
-  const times = history.map(h => new Date(h.timestamp))
-  const timeLabel = d => d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
-  const labelIndexes = Array.from(new Set([0, Math.floor((history.length-1)*0.25), Math.floor((history.length-1)*0.5), Math.floor((history.length-1)*0.75), history.length-1]))
+  const timestamps = history.map(h => new Date(h.timestamp).getTime()).filter(Number.isFinite)
+  const firstTime = timestamps.length ? Math.min(...timestamps) : Date.now()
+  const lastTime = timestamps.length ? Math.max(...timestamps) : firstTime + 60000
+  const spanMs = Math.max(60000, lastTime - firstTime)
+  const x = i => {
+    const ts = new Date(history[i].timestamp).getTime()
+    const ratio = Number.isFinite(ts) ? (ts - firstTime) / spanMs : i / Math.max(1, history.length - 1)
+    return left + Math.max(0, Math.min(1, ratio)) * chartWidth
+  }
+
+  const tickCount = spanMs <= 30*60*1000 ? 6 : spanMs <= 2*60*60*1000 ? 7 : spanMs <= 6*60*60*1000 ? 7 : 8
+  const tickTimes = Array.from({length: tickCount}, (_,i) => firstTime + spanMs * i / Math.max(1, tickCount-1))
+  const formatTick = ms => {
+    const d = new Date(ms)
+    if (spanMs >= 24*60*60*1000) {
+      return d.toLocaleDateString([], {day:'2-digit', month:'short'}) + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
+    }
+    return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
+  }
 
   const riskY = value => riskHeight - bottom - (Math.max(0, Math.min(100, value)) / 100) * (riskHeight - top - bottom)
   const riskPoints = history.map((h,i) => {
@@ -118,7 +134,14 @@ function RiskChart({ history=[], events=[], entrySpot=null }) {
         <line x1={left} x2={width-right} y1={riskY(entryRisk)} y2={riskY(entryRisk)} className="entry-line" />
         <text x={left+6} y={riskY(entryRisk)-7} className="entry-label">Entry {num(entryRisk,0)}</text>
         {eventIndexes.map((e,n) => <circle key={n} cx={x(e.index)} cy={riskY(Number(history[e.index]?.risk_score)||0)} r="5" className="event-dot" />)}
-        {labelIndexes.map(i => <text key={i} x={x(i)} y={riskHeight-8} textAnchor={i===0 ? 'start' : i===history.length-1 ? 'end' : 'middle'} className="axis-label">{timeLabel(times[i])}</text>)}
+        {tickTimes.map((ms,i) => {
+          const ratio = (ms - firstTime) / spanMs
+          const tx = left + ratio * chartWidth
+          return <g key={ms}>
+            {i > 0 && i < tickTimes.length - 1 ? <line x1={tx} x2={tx} y1={top} y2={riskHeight-bottom} className="time-grid" /> : null}
+            <text x={tx} y={riskHeight-8} textAnchor={i===0 ? 'start' : i===tickTimes.length-1 ? 'end' : 'middle'} className="axis-label">{formatTick(ms)}</text>
+          </g>
+        })}
       </svg>
     </div>
 
@@ -136,7 +159,11 @@ function RiskChart({ history=[], events=[], entrySpot=null }) {
         {spotValues.length > 0 && <polyline points={spotPoints} fill="none" className="spot-line" />}
         {history.map((h,i) => h.spot != null ? <circle key={i} cx={x(i)} cy={spotY(Number(h.spot))} r={i === history.length-1 ? 4.5 : 2} className="spot-point" /> : null)}
         {entrySpot != null && spotValues.length ? <text x={left+6} y={spotY(entrySpot)-7} className="entry-label">Entry ₹{num(entrySpot)}</text> : null}
-        {labelIndexes.map(i => <text key={i} x={x(i)} y={spotHeight-8} textAnchor={i===0 ? 'start' : i===history.length-1 ? 'end' : 'middle'} className="axis-label">{timeLabel(times[i])}</text>)}
+        {tickTimes.map((ms,i) => {
+          const ratio = (ms - firstTime) / spanMs
+          const tx = left + ratio * chartWidth
+          return <text key={ms} x={tx} y={spotHeight-8} textAnchor={i===0 ? 'start' : i===tickTimes.length-1 ? 'end' : 'middle'} className="axis-label">{formatTick(ms)}</text>
+        })}
       </svg>
     </div>
 
