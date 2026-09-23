@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 from pathlib import Path
 from threading import Event, Thread, RLock
+import time
 from typing import Any
 import json
 
@@ -94,6 +95,19 @@ def _on_market_tick(key: str, ltp: float) -> None:
 
 
 market.set_callback(_on_market_tick)
+
+
+def _wait_for_live_ltps(keys: list[str], timeout: float = 4.0) -> dict[str, float]:
+    """Wait briefly for the websocket to populate live prices after a new subscription."""
+    deadline = time.monotonic() + timeout
+    wanted = {k for k in keys if k}
+    while time.monotonic() < deadline:
+        ltps = market.get_ltps()
+        if wanted.issubset(ltps.keys()):
+            return {k: ltps[k] for k in wanted}
+        time.sleep(0.1)
+    ltps = market.get_ltps()
+    return {k: ltps[k] for k in wanted if k in ltps}
 
 
 def strategy_to_view(strategy: Strategy) -> StrategyView:
@@ -359,9 +373,27 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         db.commit(); db.refresh(strategy)
     except (InstrumentResolutionError, KeyError, ValueError, TypeError) as exc:
         db.rollback(); raise HTTPException(400,str(exc)) from exc
-    keys=[o.instrument_key for o in strategy.orders]; market.subscribe(keys)
-    for symbol in {o.symbol for o in strategy.orders}: _ensure_underlying(symbol)
-    _entry_baseline(db, strategy, market.get_ltps().get(_underlying_keys.get(strategy.orders[0].symbol)))
+    keys=[o.instrument_key for o in strategy.orders]
+    market.subscribe(keys)
+    underlying_keys=[_ensure_underlying(symbol) for symbol in {o.symbol for o in strategy.orders}]
+    live_keys=keys + [k for k in underlying_keys if k]
+    live_prices=_wait_for_live_ltps(live_keys)
+
+    # If entry price is 0, use the actual option LTP captured immediately after subscription.
+    # A paper trade should never silently start with a zero premium.
+    for order in strategy.orders:
+        if order.entry_price == 0:
+            live=live_prices.get(order.instrument_key)
+            if live is None:
+                db.rollback()
+                raise HTTPException(409, f'Live LTP unavailable for {order.trading_symbol or order.symbol}. Please connect the market feed and try again.')
+            order.entry_price=live
+            order.current_ltp=live
+
+    entry_key=_underlying_keys.get(strategy.orders[0].symbol)
+    entry_spot=live_prices.get(entry_key) if entry_key else None
+    if entry_spot is not None:
+        _entry_baseline(db, strategy, entry_spot)
     db.commit()
     alerts.start(); return strategy_to_view(strategy)
 
