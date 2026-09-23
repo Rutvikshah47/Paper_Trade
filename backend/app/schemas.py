@@ -79,6 +79,26 @@ class RiskSnapshotView(BaseModel):
     avg_iv: float | None
 
 
+class StrategyEventView(BaseModel):
+    timestamp: datetime
+    event_type: str
+    spot: float | None
+    risk_score: float | None
+    message: str
+    metadata: dict = Field(default_factory=dict)
+
+
+class AdjustmentCreate(BaseModel):
+    action: Literal["ADD_LEG", "CLOSE_LEG"]
+    order_id: int | None = None
+    order: OrderCreate | None = None
+    reason: str = Field(default="", max_length=300)
+
+
+class ExitCreate(BaseModel):
+    reason: str = Field(default="Manual paper exit", max_length=300)
+
+
 class RiskView(BaseModel):
     strategy_id: int
     spot: float | None
@@ -100,3 +120,4 @@ class RiskView(BaseModel):
     legs: list[dict] = Field(default_factory=list)
     probability: dict | None = None
     history: list[RiskSnapshotView] = Field(default_factory=list)
+    events: list[StrategyEventView] = Field(default_factory=list)
