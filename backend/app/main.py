@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from threading import Event, Thread, RLock
 from typing import Any
+import json
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,10 +14,10 @@ from .config import settings
 from .db import Base, SessionLocal, engine, get_db
 from .instrument import InstrumentResolutionError, UpstoxInstrumentResolver
 from .market import MarketDataService
-from .models import MarketBar, PaperOrder, RiskSnapshot, Strategy
+from .models import MarketBar, PaperOrder, RiskSnapshot, Strategy, StrategyEvent
 from .pnl import order_pnl
 from .risk import calculate_strategy_risk
-from .schemas import DashboardView, OrderView, RiskSnapshotView, RiskView, StrategyCreate, StrategyView
+from .schemas import AdjustmentCreate, DashboardView, ExitCreate, OrderView, RiskSnapshotView, RiskView, StrategyCreate, StrategyView, StrategyEventView
 
 Base.metadata.create_all(bind=engine)
 
@@ -121,6 +122,80 @@ def strategy_to_view(strategy: Strategy) -> StrategyView:
     )
 
 
+
+def _event_view(row: StrategyEvent) -> StrategyEventView:
+    return StrategyEventView(
+        timestamp=row.timestamp, event_type=row.event_type, spot=row.spot,
+        risk_score=row.risk_score, message=row.message,
+        metadata=json.loads(row.metadata_json) if row.metadata_json else {},
+    )
+
+
+def _record_event(db: Session, strategy_id: int, event_type: str, spot: float | None,
+                  risk_score: float | None, message: str, metadata: dict | None = None,
+                  dedupe: bool = True) -> None:
+    if dedupe:
+        latest = db.query(StrategyEvent).filter(
+            StrategyEvent.strategy_id == strategy_id,
+            StrategyEvent.event_type == event_type,
+        ).order_by(StrategyEvent.timestamp.desc()).first()
+        if latest and latest.metadata_json == json.dumps(metadata or {}, sort_keys=True):
+            return
+    db.add(StrategyEvent(
+        strategy_id=strategy_id, timestamp=datetime.now(timezone.utc),
+        event_type=event_type, spot=spot, risk_score=risk_score,
+        message=message, metadata_json=json.dumps(metadata or {}, sort_keys=True),
+    ))
+
+
+def _entry_baseline(db: Session, strategy: Strategy, spot: float | None) -> None:
+    existing = db.query(StrategyEvent).filter(
+        StrategyEvent.strategy_id == strategy.id, StrategyEvent.event_type == "ENTRY"
+    ).first()
+    if existing:
+        return
+    pnl = strategy_to_view(strategy).pnl
+    db.add(RiskSnapshot(
+        strategy_id=strategy.id, timestamp=datetime.now(timezone.utc), spot=spot,
+        risk_score=0.0, risk_band="NORMAL", pnl=pnl,
+        delta=None, gamma=None, theta=None, vega=None,
+        expected_move=None, distance_to_short_pct=None, avg_iv=None,
+    ))
+    _record_event(db, strategy.id, "ENTRY", spot, 0.0, "Strategy entered paper tracking")
+
+
+def _threat_states(strategy: Strategy, result: dict[str, Any]) -> tuple[bool, bool, bool, bool]:
+    spot, move = result.get("spot"), result.get("expected_move")
+    if spot is None or not move or move <= 0:
+        return False, False, False, False
+    short_ce = [o.strike for o in strategy.orders if o.status == "OPEN" and o.side == "SELL" and o.option_type == "CE"]
+    short_pe = [o.strike for o in strategy.orders if o.status == "OPEN" and o.side == "SELL" and o.option_type == "PE"]
+    ce_threat = any(spot >= strike - move for strike in short_ce)
+    pe_threat = any(spot <= strike + move for strike in short_pe)
+    ce_break = any(spot >= strike for strike in short_ce)
+    pe_break = any(spot <= strike for strike in short_pe)
+    return ce_threat, pe_threat, ce_break, pe_break
+
+
+def _save_event_transitions(db: Session, strategy: Strategy, result: dict[str, Any],
+                            previous: RiskSnapshot | None) -> None:
+    previous_band = previous.risk_band if previous else "NORMAL"
+    current_band = result["risk_band"]
+    if current_band in ("WARNING", "CRITICAL") and current_band != previous_band:
+        _record_event(db, strategy.id, current_band, result.get("spot"), result.get("risk_score"),
+                      f"Risk band changed to {current_band}", dedupe=False)
+    current = _threat_states(strategy, result)
+    prior = _threat_states(strategy, {
+        "spot": previous.spot if previous else None,
+        "expected_move": previous.expected_move if previous else None,
+    })
+    for idx, name in enumerate(("CE_THREATENED", "PE_THREATENED", "CE_RANGE_BREAK", "PE_RANGE_BREAK")):
+        if current[idx] and not prior[idx]:
+            _record_event(db, strategy.id, name, result.get("spot"), result.get("risk_score"),
+                          name.replace("_", " ").title(), dedupe=False)
+
+
+
 def _risk_for_strategy(db: Session, strategy: Strategy) -> dict[str, Any]:
     key = _ensure_underlying(strategy.orders[0].symbol) if strategy.orders else None
     ltps = market.get_ltps()
@@ -143,14 +218,20 @@ def _risk_for_strategy(db: Session, strategy: Strategy) -> dict[str, Any]:
     history = [RiskSnapshotView(
         timestamp=x.timestamp, spot=x.spot, risk_score=x.risk_score, risk_band=x.risk_band,
         pnl=x.pnl, delta=x.delta, gamma=x.gamma, theta=x.theta, vega=x.vega,
-        expected_move=x.expected_move, distance_to_short_pct=x.distance_to_short_pct, avg_iv=x.avg_iv
+        expected_move=x.expected_move, distance_to_short_pct=x.distance_to_short_pct,
+        distance_to_upper_short_pct=None, distance_to_lower_short_pct=None, avg_iv=x.avg_iv
     ) for x in reversed(history_rows)]
-    entry_spot = history[0].spot if history else spot
+    entry = db.query(StrategyEvent).filter(
+        StrategyEvent.strategy_id == strategy.id, StrategyEvent.event_type == "ENTRY"
+    ).order_by(StrategyEvent.timestamp.asc()).first()
+    entry_spot = entry.spot if entry and entry.spot is not None else (history[0].spot if history else spot)
+    events = db.query(StrategyEvent).filter(StrategyEvent.strategy_id == strategy.id).order_by(StrategyEvent.timestamp.asc()).limit(300).all()
     result['entry_spot'] = entry_spot
     result['spot_change_pct'] = ((spot / entry_spot)-1)*100 if spot and entry_spot else None
     result['history'] = history
     result['strategy_id'] = strategy.id
     result['probability'] = _historical_probability(db, strategy.id)
+    result['events'] = [_event_view(x) for x in events]
     return result
 
 
@@ -183,6 +264,10 @@ def _save_risk_snapshots() -> None:
         strategies = db.query(Strategy).options(joinedload(Strategy.orders)).filter(Strategy.status == 'OPEN').all()
         for strategy in strategies:
             result = _risk_for_strategy(db, strategy)
+            previous = db.query(RiskSnapshot).filter(
+                RiskSnapshot.strategy_id == strategy.id
+            ).order_by(RiskSnapshot.timestamp.desc()).first()
+            _save_event_transitions(db, strategy, result, previous)
             pnl = strategy_to_view(strategy).pnl
             db.add(RiskSnapshot(
                 strategy_id=strategy.id, timestamp=datetime.now(timezone.utc),
@@ -276,6 +361,8 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         db.rollback(); raise HTTPException(400,str(exc)) from exc
     keys=[o.instrument_key for o in strategy.orders]; market.subscribe(keys)
     for symbol in {o.symbol for o in strategy.orders}: _ensure_underlying(symbol)
+    _entry_baseline(db, strategy, market.get_ltps().get(_underlying_keys.get(strategy.orders[0].symbol)))
+    db.commit()
     alerts.start(); return strategy_to_view(strategy)
 
 
@@ -284,8 +371,93 @@ def delete_strategy(strategy_id:int, db:Session=Depends(get_db)):
     strategy=db.query(Strategy).filter(Strategy.id==strategy_id).first()
     if not strategy: raise HTTPException(404,'Strategy not found')
     db.query(RiskSnapshot).filter(RiskSnapshot.strategy_id == strategy_id).delete(synchronize_session=False)
+    db.query(StrategyEvent).filter(StrategyEvent.strategy_id == strategy_id).delete(synchronize_session=False)
     db.delete(strategy); db.commit(); return None
 
+
+
+@app.get('/api/strategies/{strategy_id}/events', response_model=list[StrategyEventView])
+def strategy_events(strategy_id: int, limit: int = Query(300, ge=1, le=1000), db: Session = Depends(get_db)):
+    if not db.query(Strategy).filter(Strategy.id == strategy_id).first():
+        raise HTTPException(404, 'Strategy not found')
+    rows = db.query(StrategyEvent).filter(StrategyEvent.strategy_id == strategy_id).order_by(StrategyEvent.timestamp.asc()).limit(limit).all()
+    return [_event_view(x) for x in rows]
+
+
+@app.post('/api/strategies/{strategy_id}/adjust', response_model=StrategyView)
+def adjust_strategy(strategy_id: int, payload: AdjustmentCreate, db: Session = Depends(get_db)):
+    strategy = db.query(Strategy).options(joinedload(Strategy.orders)).filter(Strategy.id == strategy_id).first()
+    if not strategy:
+        raise HTTPException(404, 'Strategy not found')
+    if strategy.status != 'OPEN':
+        raise HTTPException(400, 'Only open strategies can be adjusted')
+    if payload.action == 'CLOSE_LEG':
+        if payload.order_id is None:
+            raise HTTPException(400, 'order_id is required')
+        order = next((x for x in strategy.orders if x.id == payload.order_id and x.status == 'OPEN'), None)
+        if not order:
+            raise HTTPException(404, 'Open order not found')
+        live = market.get_ltps().get(order.instrument_key)
+        if live is not None:
+            order.current_ltp = live
+        order.status = 'CLOSED'
+        order.closed_at = datetime.now(timezone.utc)
+        message = payload.reason or f'Closed leg {order.id}'
+        _record_event(db, strategy.id, 'ADJUSTMENT', market.get_ltps().get(_underlying_keys.get(order.symbol)), None, message,
+                      {'action':'CLOSE_LEG','order_id':order.id}, dedupe=False)
+    else:
+        if payload.order is None:
+            raise HTTPException(400, 'order is required')
+        item = payload.order
+        if settings.use_mock_market_data:
+            instrument_key=f'MOCK|{item.symbol}|{item.expiry.isoformat()}|{item.strike:g}|{item.option_type}'
+            lot_size=400 if item.symbol == 'INFY' else 1
+            trading_symbol=f'{item.symbol} {item.strike:g} {item.option_type} {item.expiry.strftime("%d %b %y").upper()}'
+        else:
+            try:
+                resolved=resolver.resolve_option(item.symbol,item.expiry,item.strike,item.option_type)
+            except (InstrumentResolutionError, KeyError, ValueError, TypeError) as exc:
+                raise HTTPException(400,str(exc)) from exc
+            instrument_key=resolved['instrument_key']; lot_size=int(resolved['lot_size']); trading_symbol=resolved.get('trading_symbol')
+        order=PaperOrder(strategy_id=strategy.id,symbol=item.symbol,instrument_key=instrument_key,trading_symbol=trading_symbol,
+            expiry=item.expiry.isoformat(),strike=item.strike,option_type=item.option_type,side=item.side,
+            entry_price=item.entry_price,lots=item.lots,lot_size=lot_size)
+        db.add(order); db.flush()
+        market.subscribe([instrument_key]); _ensure_underlying(item.symbol)
+        _record_event(db, strategy.id, 'ADJUSTMENT', market.get_ltps().get(_underlying_keys.get(item.symbol)), None,
+                      payload.reason or f'Added leg {order.id}', {'action':'ADD_LEG','order_id':order.id}, dedupe=False)
+    db.commit(); db.refresh(strategy)
+    return strategy_to_view(strategy)
+
+
+@app.post('/api/strategies/{strategy_id}/exit', response_model=StrategyView)
+def exit_strategy(strategy_id: int, payload: ExitCreate, db: Session = Depends(get_db)):
+    strategy = db.query(Strategy).options(joinedload(Strategy.orders)).filter(Strategy.id == strategy_id).first()
+    if not strategy:
+        raise HTTPException(404, 'Strategy not found')
+    if strategy.status != 'OPEN':
+        raise HTTPException(400, 'Strategy already closed')
+    underlying_key = _underlying_keys.get(strategy.orders[0].symbol) if strategy.orders else None
+    spot = market.get_ltps().get(underlying_key) if underlying_key else None
+    result = _risk_for_strategy(db, strategy)
+    for order in strategy.orders:
+        if order.status == 'OPEN':
+            live = market.get_ltps().get(order.instrument_key)
+            if live is not None:
+                order.current_ltp = live
+            order.status = 'CLOSED'
+            order.closed_at = datetime.now(timezone.utc)
+    strategy.status = 'CLOSED'
+    _record_event(db, strategy.id, 'EXIT', spot, result.get('risk_score'), payload.reason, {'reason':payload.reason}, dedupe=False)
+    db.add(RiskSnapshot(
+        strategy_id=strategy.id, timestamp=datetime.now(timezone.utc), spot=spot,
+        risk_score=result.get('risk_score',0), risk_band=result.get('risk_band','NORMAL'),
+        pnl=strategy_to_view(strategy).pnl, delta=result.get('delta'), gamma=result.get('gamma'),
+        theta=result.get('theta'), vega=result.get('vega'), expected_move=result.get('expected_move'),
+        distance_to_short_pct=result.get('distance_to_short_pct'), avg_iv=result.get('avg_iv'),
+    ))
+    db.commit(); db.refresh(strategy)
+    return strategy_to_view(strategy)
 
 @app.get('/api/strategies/{strategy_id}/risk', response_model=RiskView)
 def strategy_risk(strategy_id:int, db:Session=Depends(get_db)):
