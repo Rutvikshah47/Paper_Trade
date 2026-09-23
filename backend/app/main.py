@@ -5,6 +5,7 @@ from threading import Event, Thread, RLock
 import time
 from typing import Any
 import json
+from types import SimpleNamespace
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +46,8 @@ _tick_lock = RLock()
 _running = Event()
 _risk_thread: Thread | None = None
 _current_bars: dict[str, dict[str, Any]] = {}
+_daily_technical_cache: dict[str, tuple[float, list[SimpleNamespace]]] = {}
+DAILY_TECHNICAL_CACHE_TTL = 300.0
 
 # Cutover for the new entry-baseline behavior. Strategies created before this
 # timestamp are legacy strategies; their underlying entry baseline is backfilled
@@ -101,6 +104,35 @@ def _on_market_tick(key: str, ltp: float) -> None:
 
 
 market.set_callback(_on_market_tick)
+
+
+def _risk_bars(db: Session, symbol: str, underlying_key: str | None) -> tuple[list[Any], str]:
+    """Load enough bars for technical indicators without hammering Upstox."""
+    bars = db.query(MarketBar).filter(
+        MarketBar.symbol == symbol
+    ).order_by(MarketBar.timestamp.desc()).limit(120).all()[::-1]
+    if len(bars) >= 15 or not underlying_key or settings.use_mock_market_data:
+        return bars, '1-minute intraday'
+
+    now = time.monotonic()
+    cached = _daily_technical_cache.get(symbol)
+    if cached and now - cached[0] < DAILY_TECHNICAL_CACHE_TTL:
+        return cached[1], 'Daily historical context'
+
+    try:
+        candles = resolver.get_historical_daily_closes(underlying_key, sessions=60)
+        daily = [
+            SimpleNamespace(
+                timestamp=x.get('timestamp'), open=x.get('open'), high=x.get('high'),
+                low=x.get('low'), close=x.get('close'), volume=x.get('volume'),
+            )
+            for x in candles if x.get('close') is not None
+        ]
+        _daily_technical_cache[symbol] = (now, daily)
+        return daily, 'Daily historical context'
+    except Exception as exc:
+        print(f'[Risk] Technical history fetch failed for {symbol}: {exc}')
+        return bars, 'Building intraday history'
 
 
 def _wait_for_live_ltps(keys: list[str], timeout: float = 4.0) -> dict[str, float]:
@@ -320,15 +352,17 @@ def _risk_for_strategy(db: Session, strategy: Strategy) -> dict[str, Any]:
             order.current_ltp = live_ltp
 
     spot = ltps.get(key) if key else None
-    bars = []
-    if key:
-        bars = db.query(MarketBar).filter(MarketBar.symbol == strategy.orders[0].symbol).order_by(MarketBar.timestamp.desc()).limit(120).all()[::-1]
+    bars, technical_source = _risk_bars(
+        db, strategy.orders[0].symbol, key
+    ) if strategy.orders else ([], 'Unavailable')
     result = calculate_strategy_risk(strategy, spot, bars) if spot is not None else {
         'risk_score':0.0,'risk_band':'NORMAL','spot':None,'expected_move':None,
         'distance_to_short_pct':None,'distance_to_upper_short_pct':None,'distance_to_lower_short_pct':None,
         'delta':None,'gamma':None,'theta':None,'vega':None,
         'avg_iv':None,'technical':{},'components':{},'legs':[],
     }
+
+    result['technical_source'] = technical_source
 
     # A strategy used to get a placeholder 0/100 entry snapshot. Upgrade that
     # placeholder to the first real risk calculation so the UI has a meaningful
@@ -558,11 +592,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
     # Calculate the initial absolute risk immediately. Technical indicators may
     # still be sparse on a brand-new strategy, but distance, Greeks and IV can
     # already produce a real score from the current market data.
-    entry_bars = []
-    if entry_key:
-        entry_bars = db.query(MarketBar).filter(
-            MarketBar.symbol == strategy.orders[0].symbol
-        ).order_by(MarketBar.timestamp.desc()).limit(120).all()[::-1]
+    entry_bars, _ = _risk_bars(db, strategy.orders[0].symbol, entry_key)
     initial_risk = calculate_strategy_risk(strategy, entry_spot, entry_bars)
     _entry_baseline(db, strategy, entry_spot, initial_risk)
     db.commit()
