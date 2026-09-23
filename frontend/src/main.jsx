@@ -54,7 +54,7 @@ function RiskPanel({ strategy }) {
     <div className="risk-top"><div><div className="eyebrow">RISK ENGINE</div><h3>Strategy health</h3><p>Monitoring only · no real orders are placed</p></div><div className={'risk-badge '+band}><span className="risk-dot"/>{risk.risk_band}<b>{num(risk.risk_score,0)}/100</b></div></div>
     <div className="risk-section"><div className="risk-section-title"><strong>Market position</strong><span>Current values</span></div><div className="risk-grid">
       <div className="risk-card primary-metric current-spot-card"><span>Current spot</span><strong>{risk.spot==null?'Waiting…':'₹'+num(risk.spot)}</strong><small>Live underlying price · now</small></div>
-      <div className="risk-card entry-spot-card"><span>Entry baseline</span><strong>{risk.entry_spot==null?'Waiting…':'₹'+num(risk.entry_spot)}</strong><small>Captured at strategy entry · Change: {pct(risk.spot_change_pct)}</small></div>
+      <div className="risk-card entry-spot-card"><span>Entry baseline</span><strong>{risk.entry_spot==null?'Waiting…':'₹'+num(risk.entry_spot)}</strong><small>{risk.entry_spot_source || 'Underlying entry reference'} · Change: {pct(risk.spot_change_pct)}</small></div>
       <div className="risk-card"><span>Expected move</span><strong>{risk.expected_move==null?'—':'±₹'+num(risk.expected_move)}</strong><small>Estimated 1σ range</small></div>
       <div className="risk-card"><span>Nearest short</span><strong>{risk.distance_to_short_pct==null?'—':num(risk.distance_to_short_pct)+'%'}</strong><small>Distance from spot</small></div>
       <div className="risk-card"><span>Average IV</span><strong>{risk.avg_iv==null?'—':num(risk.avg_iv*100,1)+'%'}</strong><small>From live option premium</small></div>
