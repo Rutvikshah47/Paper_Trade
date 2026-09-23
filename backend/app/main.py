@@ -167,20 +167,45 @@ def _record_event(db: Session, strategy_id: int, event_type: str, spot: float | 
     ))
 
 
-def _entry_baseline(db: Session, strategy: Strategy, spot: float | None) -> None:
+def _entry_baseline(
+    db: Session,
+    strategy: Strategy,
+    spot: float | None,
+    risk_result: dict[str, Any] | None = None,
+) -> None:
     existing = db.query(StrategyEvent).filter(
         StrategyEvent.strategy_id == strategy.id, StrategyEvent.event_type == "ENTRY"
     ).first()
     if existing:
         return
+
     pnl = strategy_to_view(strategy).pnl
+    result = risk_result or {
+        "risk_score": 0.0,
+        "risk_band": "NORMAL",
+        "delta": None,
+        "gamma": None,
+        "theta": None,
+        "vega": None,
+        "expected_move": None,
+        "distance_to_short_pct": None,
+        "avg_iv": None,
+    }
+    score = float(result.get("risk_score") or 0.0)
+    band = result.get("risk_band") or "NORMAL"
     db.add(RiskSnapshot(
         strategy_id=strategy.id, timestamp=datetime.now(timezone.utc), spot=spot,
-        risk_score=0.0, risk_band="NORMAL", pnl=pnl,
-        delta=None, gamma=None, theta=None, vega=None,
-        expected_move=None, distance_to_short_pct=None, avg_iv=None,
+        risk_score=score, risk_band=band, pnl=pnl,
+        delta=result.get("delta"), gamma=result.get("gamma"),
+        theta=result.get("theta"), vega=result.get("vega"),
+        expected_move=result.get("expected_move"),
+        distance_to_short_pct=result.get("distance_to_short_pct"),
+        avg_iv=result.get("avg_iv"),
     ))
-    _record_event(db, strategy.id, "ENTRY", spot, 0.0, "Strategy entered paper tracking")
+    _record_event(
+        db, strategy.id, "ENTRY", spot, score,
+        f"Strategy entered paper tracking · Initial risk {score:.1f}/100 ({band})"
+    )
 
 
 def _threat_states(strategy: Strategy, result: dict[str, Any]) -> tuple[bool, bool, bool, bool]:
@@ -245,9 +270,13 @@ def _legacy_entry_spot(db: Session, strategy: Strategy) -> float | None:
             return entry.spot
 
         candles = resolver.get_historical_daily_closes(underlying, sessions=5)
+        # Upstox daily candle timestamps are returned with an IST offset.
+        # Compare the calendar date in the timestamp itself so the current
+        # session is excluded even when Railway is running in another timezone.
+        today_str = datetime.now(timezone.utc).astimezone().date().isoformat()
         trading_candles = [
             x for x in candles
-            if str(x.get('timestamp', ''))[:10] < date.today().isoformat()
+            if str(x.get('timestamp', ''))[:10] < today_str
         ]
         trading_candles.sort(key=lambda x: str(x.get('timestamp', '')), reverse=True)
         if len(trading_candles) < 2:
@@ -299,6 +328,45 @@ def _risk_for_strategy(db: Session, strategy: Strategy) -> dict[str, Any]:
         'delta':None,'gamma':None,'theta':None,'vega':None,
         'avg_iv':None,'technical':{},'components':{},'legs':[],
     }
+
+    # A strategy used to get a placeholder 0/100 entry snapshot. Upgrade that
+    # placeholder to the first real risk calculation so the UI has a meaningful
+    # absolute risk value from the moment the dashboard is opened.
+    initial_snapshot = db.query(RiskSnapshot).filter(
+        RiskSnapshot.strategy_id == strategy.id
+    ).order_by(RiskSnapshot.timestamp.asc()).first()
+    if (
+        initial_snapshot
+        and initial_snapshot.delta is None
+        and initial_snapshot.gamma is None
+        and initial_snapshot.theta is None
+        and initial_snapshot.vega is None
+        and initial_snapshot.expected_move is None
+        and initial_snapshot.risk_score == 0.0
+        and spot is not None
+    ):
+        initial_snapshot.risk_score = result['risk_score']
+        initial_snapshot.risk_band = result['risk_band']
+        initial_snapshot.spot = initial_snapshot.spot if initial_snapshot.spot is not None else spot
+        initial_snapshot.delta = result['delta']
+        initial_snapshot.gamma = result['gamma']
+        initial_snapshot.theta = result['theta']
+        initial_snapshot.vega = result['vega']
+        initial_snapshot.expected_move = result['expected_move']
+        initial_snapshot.distance_to_short_pct = result['distance_to_short_pct']
+        initial_snapshot.avg_iv = result['avg_iv']
+
+        entry_event = db.query(StrategyEvent).filter(
+            StrategyEvent.strategy_id == strategy.id,
+            StrategyEvent.event_type == 'ENTRY',
+        ).order_by(StrategyEvent.timestamp.asc()).first()
+        if entry_event and entry_event.risk_score == 0.0:
+            entry_event.risk_score = result['risk_score']
+            entry_event.message = (
+                f"Strategy entered paper tracking · Initial risk "
+                f"{result['risk_score']:.1f}/100 ({result['risk_band']})"
+            )
+
     # Ensure legacy strategies get their N-2 baseline even if the service was
     # deployed/restarted after the strategy was loaded.
     legacy_entry_spot = _legacy_entry_spot(db, strategy)
@@ -461,17 +529,20 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
     live_keys=keys + [k for k in underlying_keys if k]
     live_prices=_wait_for_live_ltps(live_keys)
 
-    # If entry price is 0, use the actual option LTP captured immediately after subscription.
-    # A paper trade should never silently start with a zero premium.
+    # Keep every leg's current LTP synchronized with the live feed. This is
+    # also what lets the entry risk calculation use current option premiums.
+    # If entry price is 0, use the actual option LTP captured immediately after
+    # subscription so a paper trade never silently starts with a zero premium.
     for order in strategy.orders:
-        if order.entry_price == 0:
-            live=live_prices.get(order.instrument_key)
-            if live is None:
-                db.delete(strategy)
-                db.commit()
-                raise HTTPException(409, f'Live LTP unavailable for {order.trading_symbol or order.symbol}. Please connect the market feed and try again.')
-            order.entry_price=live
-            order.current_ltp=live
+        live = live_prices.get(order.instrument_key)
+        if live is not None:
+            order.current_ltp = live
+        elif order.entry_price == 0:
+            db.delete(strategy)
+            db.commit()
+            raise HTTPException(409, f'Live LTP unavailable for {order.trading_symbol or order.symbol}. Please connect the market feed and try again.')
+        elif order.current_ltp is None:
+            order.current_ltp = order.entry_price
 
     entry_key=_underlying_keys.get(strategy.orders[0].symbol)
     entry_spot=live_prices.get(entry_key) if entry_key else None
@@ -483,7 +554,16 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         db.delete(strategy)
         db.commit()
         raise HTTPException(409, 'Live underlying LTP unavailable. Please connect the market feed and try again.')
-    _entry_baseline(db, strategy, entry_spot)
+    # Calculate the initial absolute risk immediately. Technical indicators may
+    # still be sparse on a brand-new strategy, but distance, Greeks and IV can
+    # already produce a real score from the current market data.
+    entry_bars = []
+    if entry_key:
+        entry_bars = db.query(MarketBar).filter(
+            MarketBar.symbol == strategy.orders[0].symbol
+        ).order_by(MarketBar.timestamp.desc()).limit(120).all()[::-1]
+    initial_risk = calculate_strategy_risk(strategy, entry_spot, entry_bars)
+    _entry_baseline(db, strategy, entry_spot, initial_risk)
     db.commit()
     alerts.start(); return strategy_to_view(strategy)
 
