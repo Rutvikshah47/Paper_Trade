@@ -60,10 +60,22 @@ def signed(side):
     return 1 if side == 'BUY' else -1
 
 
-def technical_metrics(closes, volumes=None):
+def atr_wilder(highs, lows, closes, period=14):
+    if len(closes) < period + 1 or len(highs) != len(closes) or len(lows) != len(closes):
+        return None
+    trs = [max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1])) for i in range(1, len(closes))]
+    atr = mean(trs[:period])
+    for tr in trs[period:]:
+        atr = ((atr * (period - 1)) + tr) / period
+    return atr
+
+
+def technical_metrics(closes, volumes=None, highs=None, lows=None):
     if not closes:
         return {}
     metrics = {}
+    highs = highs or closes
+    lows = lows or closes
     if len(closes) >= 15:
         gains = [max(closes[i]-closes[i-1], 0) for i in range(1, len(closes))][-14:]
         losses = [max(closes[i-1]-closes[i], 0) for i in range(1, len(closes))][-14:]
@@ -73,11 +85,15 @@ def technical_metrics(closes, volumes=None):
         downs = [max(closes[i-1]-closes[i], 0) for i in range(1, len(closes))][-14:]
         denom = sum(ups) + sum(downs)
         metrics['adx'] = 100 * abs(sum(ups)-sum(downs)) / denom if denom else 0.0
+    atr = atr_wilder(highs, lows, closes, 14)
+    metrics['atr'] = atr
+    metrics['atr_pct'] = atr / closes[-1] * 100 if atr is not None and closes[-1] else None
     if volumes and len(volumes) >= 10:
         current = volumes[-1]
         avg = mean(volumes[-11:-1])
         metrics['volume_ratio'] = current / avg if avg else None
-        metrics['vwap'] = sum(c*v for c, v in zip(closes[-20:], volumes[-20:])) / sum(volumes[-20:]) if sum(volumes[-20:]) else None
+        total_volume = sum(volumes[-20:])
+        metrics['vwap'] = sum(c*v for c, v in zip(closes[-20:], volumes[-20:])) / total_volume if total_volume else None
     metrics['momentum_pct'] = ((closes[-1] / closes[-6]) - 1) * 100 if len(closes) >= 6 and closes[-6] else None
     return metrics
 
@@ -133,9 +149,15 @@ def calculate_strategy_risk(strategy, spot, bars, risk_free_rate=0.06):
     gamma_score = min(100.0, abs(gamma) / max(0.001, open_qty * 0.001) * 100)
     closes = [b.close for b in bars] if bars else []
     volumes = [b.volume for b in bars] if bars else []
-    tech = technical_metrics(closes, volumes)
+    highs = [b.high for b in bars] if bars else []
+    lows = [b.low for b in bars] if bars else []
+    tech = technical_metrics(closes, volumes, highs, lows)
     momentum_score = min(100.0, abs(tech.get('momentum_pct') or 0) * 12)
-    tech_score = max(momentum_score, min(100.0, (tech.get('adx') or 0) * 1.2))
+    rsi_score = min(100.0, abs((tech.get('rsi') or 50) - 50) * 2)
+    adx_score = min(100.0, (tech.get('adx') or 0) * 1.2)
+    atr_score = min(100.0, (tech.get('atr_pct') or 0) * 20)
+    volume_score = min(100.0, max(0.0, ((tech.get('volume_ratio') or 1) - 1) * 50))
+    tech_score = 0.25*momentum_score + 0.20*rsi_score + 0.20*adx_score + 0.20*atr_score + 0.15*volume_score
     score = round(0.35*distance_score + 0.20*delta_score + 0.15*gamma_score + 0.15*iv_score + 0.15*tech_score, 1)
     if short_strikes:
         upper = max(short_strikes)
