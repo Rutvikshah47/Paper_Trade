@@ -127,8 +127,6 @@ def _risk_for_strategy(db: Session, strategy: Strategy) -> dict[str, Any]:
     for order in strategy.orders:
         live_ltp = ltps.get(order.instrument_key)
         if live_ltp is not None:
-            # Keep the ORM object in sync for risk calculation without making
-            # a separate write on every market tick.
             order.current_ltp = live_ltp
 
     spot = ltps.get(key) if key else None
@@ -240,7 +238,7 @@ def dashboard(db: Session = Depends(get_db)):
     strategies = db.query(Strategy).options(joinedload(Strategy.orders)).order_by(Strategy.id.desc()).all()
     views = [strategy_to_view(s) for s in strategies]
     return DashboardView(strategies=views,total_pnl=round(sum(s.pnl for s in views),2),
-        open_orders=sum(1 for s in views for s in strategy_to_view(s).orders if s.status == 'OPEN'),
+        open_orders=sum(1 for s in views for o in s.orders if o.status == 'OPEN'),
         market_data_mode='mock' if settings.use_mock_market_data else 'upstox')
 
 
