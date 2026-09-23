@@ -12,6 +12,7 @@ class MarketDataService:
         self.access_token = access_token
         self.verify_ssl = verify_ssl
         self._ltps: dict[str, float] = {}
+        self._volumes: dict[str, float] = {}
         self._lock = threading.RLock()
         self._subscribed: set[str] = set()
         self._running = False
@@ -27,6 +28,10 @@ class MarketDataService:
     def get_ltps(self) -> dict[str, float]:
         with self._lock:
             return dict(self._ltps)
+
+    def get_volumes(self) -> dict[str, float]:
+        with self._lock:
+            return dict(self._volumes)
 
     def subscribed_keys(self) -> list[str]:
         with self._lock:
@@ -66,7 +71,6 @@ class MarketDataService:
             try:
                 callback(key, ltp)
             except Exception:
-                # Market data must not die because an application callback failed.
                 pass
 
     def _mock_loop(self) -> None:
@@ -101,9 +105,7 @@ class MarketDataService:
                 configuration = upstox_client.Configuration()
                 configuration.access_token = self.access_token
                 api_client = upstox_client.ApiClient(configuration)
-                streamer = upstox_client.MarketDataStreamerV3(
-                    api_client, [], "ltpc"
-                )
+                streamer = upstox_client.MarketDataStreamerV3(api_client, [], "ltpc")
                 self._streamer = streamer
 
                 def on_open(*_args):
@@ -124,19 +126,16 @@ class MarketDataService:
                                 continue
                             ltpc = feed.get("ltpc")
                             if not isinstance(ltpc, dict):
-                                # Defensive handling for future SDK/feed wrappers.
                                 full = feed.get("fullFeed", {})
                                 if isinstance(full, dict):
                                     market_ff = full.get("marketFF", {})
-                                    ltpc = (
-                                        market_ff.get("ltpc")
-                                        if isinstance(market_ff, dict)
-                                        else None
-                                    )
+                                    ltpc = market_ff.get("ltpc") if isinstance(market_ff, dict) else None
                             if isinstance(ltpc, dict) and ltpc.get("ltp") is not None:
                                 value = float(ltpc["ltp"])
                                 with self._lock:
                                     self._ltps[key] = value
+                                    if ltpc.get("volume") is not None:
+                                        self._volumes[key] = float(ltpc["volume"])
                                 self._emit(key, value)
                     except Exception as exc:
                         self.last_error = f"Malformed market-data tick: {exc}"
