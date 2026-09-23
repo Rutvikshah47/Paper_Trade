@@ -48,3 +48,33 @@ class PaperOrder(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     strategy: Mapped[Strategy] = relationship(back_populates="orders")
+
+
+class RiskSnapshot(Base):
+    __tablename__ = "risk_snapshots"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    strategy_id: Mapped[int] = mapped_column(ForeignKey("strategies.id", ondelete="CASCADE"), nullable=False, index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+    spot: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk_score: Mapped[float] = mapped_column(Float, default=0)
+    risk_band: Mapped[str] = mapped_column(String(20), default="NORMAL")
+    pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gamma: Mapped[float | None] = mapped_column(Float, nullable=True)
+    theta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vega: Mapped[float | None] = mapped_column(Float, nullable=True)
+    expected_move: Mapped[float | None] = mapped_column(Float, nullable=True)
+    distance_to_short_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_iv: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class MarketBar(Base):
+    __tablename__ = "market_bars"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    open: Mapped[float] = mapped_column(Float, nullable=False)
+    high: Mapped[float] = mapped_column(Float, nullable=False)
+    low: Mapped[float] = mapped_column(Float, nullable=False)
+    close: Mapped[float] = mapped_column(Float, nullable=False)
+    volume: Mapped[float | None] = mapped_column(Float, nullable=True)
