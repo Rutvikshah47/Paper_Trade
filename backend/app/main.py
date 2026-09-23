@@ -128,6 +128,8 @@ def _risk_bars(db: Session, symbol: str, underlying_key: str | None) -> tuple[li
             )
             for x in candles if x.get('close') is not None
         ]
+        # Technical indicators must consume bars oldest -> newest.
+        daily.sort(key=lambda x: str(x.timestamp or ''))
         _daily_technical_cache[symbol] = (now, daily)
         return daily, 'Daily historical context'
     except Exception as exc:
