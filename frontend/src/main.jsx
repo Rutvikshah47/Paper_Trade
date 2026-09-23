@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './style.css'
 
@@ -280,6 +280,11 @@ function App(){
   const [market,setMarket]=useState({status:'DISCONNECTED',mode:'upstox',subscribed:[],last_error:null})
   const [connecting,setConnecting]=useState(false)
   const [globalMessage,setGlobalMessage]=useState('')
+  const [streamConnected,setStreamConnected]=useState(false)
+  const [lastLiveUpdate,setLastLiveUpdate]=useState(null)
+  const liveRefreshTimer=useRef(null)
+  const reconnectTimer=useRef(null)
+  const socketRef=useRef(null)
 
   const loadRisks=async strategies=>{
     const results=await Promise.all(strategies.map(async s=>{
@@ -301,7 +306,82 @@ function App(){
       if(m.ok)setMarket(await m.json())
     }catch(e){setGlobalMessage('Backend unavailable: '+e.message)}
   }
-  useEffect(()=>{refresh();const t=setInterval(refresh,10000);return()=>clearInterval(t)},[])
+
+  const refreshFromLiveTick=async()=>{
+    try{
+      const d=await fetch(apiUrl('/api/dashboard'))
+      if(!d.ok)return
+      const data=await d.json()
+      setDashboard(data)
+      loadRisks(data.strategies)
+      if(selectedId!=null&&!data.strategies.some(s=>s.id===selectedId))setSelectedId(data.strategies[0]?.id??null)
+    }catch{}
+  }
+
+  const scheduleLiveRefresh=()=>{
+    if(liveRefreshTimer.current)clearTimeout(liveRefreshTimer.current)
+    // Coalesce a burst of option/underlying ticks into one UI refresh while
+    // keeping the dashboard effectively real-time.
+    liveRefreshTimer.current=setTimeout(()=>{
+      liveRefreshTimer.current=null
+      refreshFromLiveTick()
+    },250)
+  }
+
+  useEffect(()=>{
+    refresh()
+    // Polling is now a recovery/fallback path. Normal market updates arrive
+    // immediately over the backend WebSocket stream.
+    const t=setInterval(refresh,30000)
+    return()=>{
+      clearInterval(t)
+      if(liveRefreshTimer.current)clearTimeout(liveRefreshTimer.current)
+    }
+  },[])
+
+  useEffect(()=>{
+    let disposed=false
+    const streamUrl=()=>{
+      if(API_BASE_URL)return API_BASE_URL.replace(/^http/,'ws')+'/api/stream'
+      return (window.location.protocol==='https:'?'wss':'ws')+'://'+window.location.host+'/api/stream'
+    }
+    const connect=()=>{
+      if(disposed)return
+      try{
+        const ws=new WebSocket(streamUrl())
+        socketRef.current=ws
+        ws.onopen=()=>{if(!disposed)setStreamConnected(true)}
+        ws.onmessage=event=>{
+          try{
+            const payload=JSON.parse(event.data)
+            if(payload.type==='market_tick'){
+              setLastLiveUpdate(Date.now())
+              scheduleLiveRefresh()
+            }
+          }catch{}
+        }
+        ws.onerror=()=>{if(!disposed)setStreamConnected(false)}
+        ws.onclose=()=>{
+          socketRef.current=null
+          if(!disposed){
+            setStreamConnected(false)
+            reconnectTimer.current=setTimeout(connect,2000)
+          }
+        }
+      }catch{
+        if(!disposed)reconnectTimer.current=setTimeout(connect,2000)
+      }
+    }
+    connect()
+    return()=>{
+      disposed=true
+      if(reconnectTimer.current)clearTimeout(reconnectTimer.current)
+      if(liveRefreshTimer.current)clearTimeout(liveRefreshTimer.current)
+      if(socketRef.current){
+        try{socketRef.current.close()}catch{}
+      }
+    }
+  },[])
   const selectedStrategy=useMemo(()=>dashboard.strategies.find(s=>s.id===selectedId)||null,[dashboard.strategies,selectedId])
   const selectedRisk=selectedId!=null?riskMap[selectedId]:null
 
@@ -328,7 +408,7 @@ function App(){
     <header className="site-header">
       <div className="header-inner">
         <div className="brand"><div className="brand-icon">P</div><div><div className="brand-name">Paper Trader</div><span>Options strategy & risk dashboard</span></div></div>
-        <div className="header-actions"><div className={'feed-status '+(market.status.includes('CONNECTED')?'connected':market.status.startsWith('ERROR')?'error':'')}><span className="feed-dot"/>{market.status}</div><button className="button-secondary" onClick={connectMarket} disabled={connecting}>{connecting?'Refreshing…':'Refresh feed'}</button><button className="button-primary" onClick={()=>setShowCreate(true)}>+ New strategy</button></div>
+        <div className="header-actions"><div className={'feed-status '+(market.status.includes('CONNECTED')?'connected':market.status.startsWith('ERROR')?'error':'')}><span className="feed-dot"/>{market.status}</div><div className={'live-stream '+(streamConnected?'live':'')}><span className="stream-dot"/>{streamConnected?'LIVE PUSH':'RECONNECTING'}</div><button className="button-secondary" onClick={connectMarket} disabled={connecting}>{connecting?'Refreshing…':'Refresh feed'}</button><button className="button-primary" onClick={()=>setShowCreate(true)}>+ New strategy</button></div>
       </div>
     </header>
 
@@ -338,7 +418,7 @@ function App(){
 
       <section className="page-intro">
         <div><div className="section-kicker">LIVE DASHBOARD</div><h1>Strategy overview</h1><p>All paper strategies in one view. Click a strategy for the full risk workspace.</p></div>
-        <div className="intro-note">Updates every 10 seconds · risk engine refreshed with live market data</div>
+        <div className="intro-note">{streamConnected?'Live market push · updates immediately after each received tick':'Live push reconnecting · fallback refresh every 30s'}{lastLiveUpdate?' · Last tick '+new Date(lastLiveUpdate).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}):''}</div>
       </section>
 
       <section className="portfolio-summary">
