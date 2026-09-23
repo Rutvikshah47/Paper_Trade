@@ -297,6 +297,12 @@ def _risk_for_strategy(db: Session, strategy: Strategy) -> dict[str, Any]:
         'delta':None,'gamma':None,'theta':None,'vega':None,
         'avg_iv':None,'technical':{},'components':{},'legs':[],
     }
+    # Ensure legacy strategies get their N-2 baseline even if the service was
+    # deployed/restarted after the strategy was loaded.
+    legacy_entry_spot = _legacy_entry_spot(db, strategy)
+    if legacy_entry_spot is not None:
+        db.commit()
+
     history_rows = db.query(RiskSnapshot).filter(RiskSnapshot.strategy_id == strategy.id).order_by(RiskSnapshot.timestamp.desc()).limit(180).all()
     history = [RiskSnapshotView(
         timestamp=x.timestamp, spot=x.spot, risk_score=x.risk_score, risk_band=x.risk_band,
