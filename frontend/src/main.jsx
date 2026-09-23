@@ -296,7 +296,6 @@ function App(){
       const [d,m]=await Promise.all([fetch(apiUrl('/api/dashboard')),fetch(apiUrl('/api/market/status'))])
       if(d.ok){
         const data=await d.json();setDashboard(data);loadRisks(data.strategies)
-        if(selectedId==null&&data.strategies.length)setSelectedId(data.strategies[0].id)
         if(selectedId!=null&&!data.strategies.some(s=>s.id===selectedId))setSelectedId(data.strategies[0]?.id??null)
       }
       if(m.ok)setMarket(await m.json())
