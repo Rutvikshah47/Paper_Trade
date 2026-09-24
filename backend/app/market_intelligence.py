@@ -53,7 +53,10 @@ SENSITIVITY = {
 REPORT_SCHEMA = {
     "type": "object",
     "properties": {
-        "market_mood": {"type": "string"},
+        "market_mood": {
+            "type": "string",
+            "enum": ["Bullish", "Cautious Positive", "Neutral / Mixed", "Cautious Negative", "Bearish"]
+        },
         "summary": {"type": "string"},
         "outlook": {"type": "string"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 100},
@@ -80,8 +83,9 @@ REPORT_SCHEMA = {
         }, "required": ["headline", "source", "impact", "sectors", "summary"]}},
         "watchlist": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
         "events": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+        "data_quality": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
     },
-    "required": ["market_mood", "summary", "outlook", "confidence", "drivers", "sector_impacts", "news_items", "watchlist", "events"],
+    "required": ["market_mood", "summary", "outlook", "confidence", "drivers", "sector_impacts", "news_items", "watchlist", "events", "data_quality"],
 }
 
 
@@ -268,12 +272,17 @@ For each sector, start from its deterministic baseline score and use ai_adjustme
 market numbers. Do not give personalized trade instructions.
 """
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "tools": [{"google_search": {}}],
         "generationConfig": {
-            "responseMimeType": "application/json",
-            "responseSchema": REPORT_SCHEMA,
+            "responseFormat": {
+                "text": {
+                    "mimeType": "application/json",
+                    "schema": REPORT_SCHEMA,
+                }
+            },
             "temperature": 0.2,
+            "maxOutputTokens": 12000,
         },
     }
     response = requests.post(
@@ -332,6 +341,7 @@ def generate_report(api_key: str = "") -> dict:
         "news_items": [],
         "watchlist": ["GIFT Nifty", "Nifty 50", "Bank Nifty", "India VIX", "USD/INR", "Brent"],
         "events": [],
+        "data_quality": [],
         "sources": [],
     }
 
@@ -340,6 +350,10 @@ def generate_report(api_key: str = "") -> dict:
             ai, sources = _gemini(api_key, market, baseline)
             report.update(ai)
             report["sources"] = sources[:15]
+            # Keep machine-observed data-quality notes alongside any AI notes.
+            report["data_quality"] = list(dict.fromkeys(
+                (market.get("quality") or []) + (report.get("data_quality") or [])
+            ))[:8]
             # Preserve the deterministic baseline as the anchor. The AI may only
             # contribute the explicit adjustment field.
             merged = []
@@ -367,19 +381,37 @@ def generate_report(api_key: str = "") -> dict:
     report["global_cues"] = [{"name": k, **v} for k, v in market["global"].items()]
     report["india_snapshot"] = [{"name": k, **v} for k, v in market["india"].items() if isinstance(v, dict)]
     report["market_pressure"] = baseline["pressure"]
-    report["data_quality"] = market["quality"]
+    report["data_quality"] = list(dict.fromkeys(
+        (market.get("quality") or []) + (report.get("data_quality") or [])
+    ))[:8]
     report.setdefault("generated_by", "rule-engine")
     return report
 
 
 NEWS_INSTRUCTION = """
 You are the market intelligence layer for an Indian equity pre-market dashboard.
-Use Google Search for fresh financial news and events from the last 24 hours.
-Prioritize Reuters, Bloomberg, CNBC, Financial Times, WSJ, RBI, Federal Reserve,
-ECB, BoJ, NSE/BSE filings and company filings when available.
 
-Use supplied market data as authoritative for all numeric values. Do not invent
-prices, percentages or flow values. Clearly distinguish factual news from inference.
-The output is a market-read-through and scenario analysis, not personalized
-investment advice. Do not give guaranteed predictions.
-"""
+Your job is to explain the current market using REAL-TIME web information.
+Use Google Search aggressively for financial news published or materially updated
+within the last 24 hours. Search across India, US, Europe, China/Asia, central
+banks, inflation/rates, crude/energy, currencies, geopolitics, trade/tariffs,
+large Indian companies, and sector-specific developments.
+
+Prefer authoritative or high-quality sources where available: Reuters,
+Bloomberg, CNBC, Financial Times, WSJ, RBI, Federal Reserve, ECB, BoJ,
+NSE/BSE/company filings and official government releases.
+
+The supplied market-data block is authoritative for numeric market values.
+Do not replace supplied prices, percentages or institutional-flow values with
+numbers inferred from search. Use search to VERIFY context, find fresh news,
+identify catalysts, and explain implications.
+
+Clearly separate:
+1) verified facts from current market data and sourced news,
+2) interpretation/read-through,
+3) conditional scenarios.
+
+Do not give guaranteed predictions or personalized trade instructions. Never claim
+that a sector or index will definitely rise or fall. Describe the conditions that
+could support or pressure them.
+""
