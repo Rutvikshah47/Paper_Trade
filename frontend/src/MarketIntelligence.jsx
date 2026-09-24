@@ -40,16 +40,18 @@ function NewsCard({item}){
 }
 
 function GlobalCoverage({items}){
-  const expected=['Nasdaq','Dow','S&P 500','Nikkei','Hang Seng','Shanghai','Brent','Gold','DXY','US 10Y','USD/INR']
+  const expected=['Nasdaq','Dow','S&P 500','Nikkei','Hang Seng','FTSE 100','DAX','CAC 40','Brent','WTI','USD/INR']
   const byName=new Map((items||[]).map(x=>[x.name,x]))
   return <div className="mi-global-coverage">
     {expected.map(name=>{
       const item=byName.get(name)
-      const value=item?.name==='US 10Y' ? fmtNum(item.last,2)+'%' : item?.name==='USD/INR' ? '₹'+fmtNum(item.last,2) : fmtNum(item?.last,2)
+      const value=item?.name==='USD/INR' ? '₹'+fmtNum(item.last,2) : fmtNum(item?.last,2)
       return <div className={'mi-global-card '+(item?'available':'missing')} key={name}>
         <div className="mi-global-name">{name}</div>
-        <strong>{item?value:'Not verified'}</strong>
-        <span className={item?toneForPct(item.pct):'neutral'}>{item?fmtPct(item.pct):'Awaiting verified value'}</span>
+        <strong>{item?value:'Not available'}</strong>
+        <span className={item?toneForPct(item.pct):'neutral'}>
+          {item ? (fmtPct(item.pct)+' · '+(item.source||'Upstox')) : 'Not published by Upstox'}
+        </span>
       </div>
     })}
   </div>
