@@ -657,9 +657,17 @@ def shutdown():
 
 @app.get('/api/health')
 def health() -> dict[str, Any]:
-    return {'status':'ok','market_data':market.status,'mode':'mock' if settings.use_mock_market_data else 'upstox',
-            'telegram_configured':alerts.configured,'upstox_configured':bool(settings.upstox_access_token),
-            'last_market_error':market.last_error}
+    runtime_settings = Settings()
+    return {
+        'status': 'ok',
+        'market_data': market.status,
+        'mode': 'mock' if runtime_settings.use_mock_market_data else 'upstox',
+        'telegram_configured': alerts.configured,
+        'upstox_configured': bool(runtime_settings.upstox_access_token),
+        'gemini_configured': bool(runtime_settings.gemini_api_key),
+        'gemini_model': runtime_settings.gemini_model,
+        'last_market_error': market.last_error,
+    }
 
 
 @app.get('/api/dashboard', response_model=DashboardView)
