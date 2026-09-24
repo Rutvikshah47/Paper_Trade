@@ -227,8 +227,11 @@ def _upstox_global_snapshot() -> tuple[dict[str, dict], list[str]]:
         "Nasdaq": ["US TECH 100", "NASDAQ"],
         "Nikkei": ["NIKKEI 225", "NIKKEI"],
         "Hang Seng": ["HANG SENG"],
-        "Shanghai": ["SHANGHAI"],
+        "FTSE 100": ["FTSE 100"],
+        "DAX": ["DAX"],
+        "CAC 40": ["CAC 40"],
         "Brent": ["OIL (BRENT)", "BRENT"],
+        "WTI": ["OIL (WTI)", "WTI"],
         "USD/INR": ["USD INR", "USD/INR"],
     }
     normalized = []
@@ -795,16 +798,17 @@ def generate_report(api_key: str = "") -> dict:
             ]
             if market["india"].get("USD/INR", {}).get("last") is not None:
                 report["global_cues"].append({"name": "USD/INR", **market["india"]["USD/INR"]})
+            supported_global = [
+                "GIFT Nifty", "Dow", "S&P 500", "Nasdaq", "Nikkei",
+                "Hang Seng", "FTSE 100", "DAX", "CAC 40", "Brent", "WTI", "USD/INR"
+            ]
             verified_global = sum(
-                1 for name in (
-                    "Nasdaq", "Dow", "S&P 500", "Nikkei", "Hang Seng",
-                    "Shanghai", "Brent", "Gold", "DXY", "US 10Y", "USD/INR"
-                )
+                1 for name in supported_global
                 if market["global"].get(name, {}).get("last") is not None
                 or market["india"].get(name, {}).get("last") is not None
             )
             market["quality"].append(
-                f"Google Search global-cue coverage: {verified_global}/11 verified."
+                f"Upstox global-cue coverage: {verified_global}/{len(supported_global)} supported instruments verified."
             )
             report["data_quality"] = list(dict.fromkeys(
                 (market.get("quality") or []) + (report.get("data_quality") or [])
