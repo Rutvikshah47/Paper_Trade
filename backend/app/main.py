@@ -503,11 +503,9 @@ def _risk_for_strategy(db: Session, strategy: Strategy) -> dict[str, Any]:
                 f"{result['risk_score']:.1f}/100 ({result['risk_band']})"
             )
 
-    # Ensure legacy strategies get their N-2 baseline even if the service was
-    # deployed/restarted after the strategy was loaded.
-    legacy_entry_spot = _legacy_entry_spot(db, strategy)
-    if legacy_entry_spot is not None:
-        db.commit()
+    # Legacy N-2 backfills are persisted during startup. Do not commit from
+    # this read endpoint: concurrent risk reads should never contend with the
+    # background snapshot writer or market-intelligence report writer.
 
     history_rows = db.query(RiskSnapshot).filter(RiskSnapshot.strategy_id == strategy.id).order_by(RiskSnapshot.timestamp.desc()).limit(180).all()
     history = [RiskSnapshotView(
