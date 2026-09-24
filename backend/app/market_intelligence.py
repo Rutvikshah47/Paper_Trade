@@ -190,19 +190,35 @@ market numbers. Do not give personalized trade instructions.
             "maxOutputTokens": 12000,
         },
     }
-    response = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-        json=payload,
-        timeout=90,
-    )
-    response.raise_for_status()
+    response = None
+    for attempt in range(2):
+        response = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            json=payload,
+            timeout=90,
+        )
+        if response.ok:
+            break
+        if response.status_code not in {429, 500, 502, 503, 504} or attempt == 1:
+            raise RuntimeError(f"Gemini HTTP {response.status_code}: {response.text[:1200]}")
+        time.sleep(2)
+
     body = response.json()
-    parts = body.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-    text = "".join(p.get("text", "") for p in parts)
-    result = json.loads(text)
+    candidates = body.get("candidates") or []
+    if not candidates:
+        raise RuntimeError("Gemini returned no candidates")
+    candidate = candidates[0]
+    parts = candidate.get("content", {}).get("parts", [])
+    text = "".join(p.get("text", "") for p in parts).strip()
+    if not text:
+        raise RuntimeError("Gemini returned no text; finishReason=" + str(candidate.get("finishReason", "unknown")))
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Gemini returned invalid JSON: {text[:1000]}") from exc
     sources = []
-    chunks = body.get("candidates", [{}])[0].get("groundingMetadata", {}).get("groundingChunks", [])
+    chunks = candidate.get("groundingMetadata", {}).get("groundingChunks", [])
     for chunk in chunks:
         web = chunk.get("web") or {}
         uri, title = web.get("uri"), web.get("title")
