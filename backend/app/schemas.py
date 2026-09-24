@@ -139,6 +139,7 @@ class MarketReportView(BaseModel):
     sector_impacts: list[dict] = Field(default_factory=list)
     news_items: list[dict] = Field(default_factory=list)
     events: list[dict] = Field(default_factory=list)
+    scenarios: list[dict] = Field(default_factory=list)
     watchlist: list[str] = Field(default_factory=list)
     summary: str = ""
     outlook: str = ""
