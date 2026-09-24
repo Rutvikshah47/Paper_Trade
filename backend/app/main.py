@@ -725,10 +725,19 @@ def generate_market_intelligence(db: Session = Depends(get_db)):
     # so SQLite never has two long-lived application writers contending.
     with _market_intel_lock, _risk_compute_lock:
         runtime_settings = Settings()
+        configured = bool(runtime_settings.gemini_api_key)
         print(
-            f"[Market Intelligence] Gemini configured={bool(runtime_settings.gemini_api_key)} "
-            f"model={runtime_settings.gemini_model}"
+            f"[Market Intelligence] Gemini configured={configured} "
+            f"model={runtime_settings.gemini_model} "
+            f"env={os.getenv('RAILWAY_ENVIRONMENT_NAME', 'unknown')} "
+            f"deployment={os.getenv('RAILWAY_DEPLOYMENT_ID', 'unknown')}"
         )
+        if not configured:
+            raise HTTPException(
+                503,
+                'Gemini is not available in the running backend process. '
+                'Verify GEMINI_API_KEY on this Railway service/environment and redeploy.'
+            )
         try:
             report = generate_report(runtime_settings.gemini_api_key)
         except Exception as exc:
