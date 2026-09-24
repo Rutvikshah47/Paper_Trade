@@ -115,131 +115,7 @@ def _nse_json(path: str):
 
 
 
-YAHOO_SYMBOLS = {
-    "Nasdaq": "^IXIC",
-    "Dow": "^DJI",
-    "S&P 500": "^GSPC",
-    "Nikkei": "^N225",
-    "Hang Seng": "^HSI",
-    "Shanghai": "000001.SS",
-    "Brent": "BZ=F",
-    "Gold": "GC=F",
-    "DXY": "DX-Y.NYB",
-    "US 10Y": "^TNX",
-    "USD/INR": "INR=X",
-}
-_GLOBAL_CACHE: tuple[float, dict[str, dict]] | None = None
-GLOBAL_CACHE_TTL = 300.0
-
-
-def _float_value(value):
-    try:
-        if value is None or value == "":
-            return None
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _yahoo_batch_quotes() -> dict[str, dict]:
-    symbols = ",".join(YAHOO_SYMBOLS.values())
-    headers = {"User-Agent": UA, "Accept": "application/json,text/plain,*/*"}
-    quality = []
-    for endpoint in YAHOO_QUOTE_ENDPOINTS:
-        for attempt in range(2):
-            try:
-                response = requests.get(
-                    endpoint,
-                    params={
-                        "symbols": symbols,
-                        "lang": "en-US",
-                        "region": "US",
-                        "corsDomain": "finance.yahoo.com",
-                    },
-                    headers=headers,
-                    timeout=15,
-                    verify=False,
-                )
-                if response.ok:
-                    rows = response.json().get("quoteResponse", {}).get("result", [])
-                    out = {}
-                    by_symbol = {v: k for k, v in YAHOO_SYMBOLS.items()}
-                    for row in rows:
-                        label = by_symbol.get(row.get("symbol"))
-                        last = _float_value(row.get("regularMarketPrice"))
-                        prev = _float_value(row.get("regularMarketPreviousClose"))
-                        if label and last is not None and prev not in (None, 0):
-                            out[label] = {
-                                "last": last,
-                                "prev": prev,
-                                "pct": (last / prev - 1.0) * 100.0,
-                                "source": "Yahoo Finance",
-                            }
-                    if out:
-                        return out
-                    quality.append("Yahoo quote batch returned no usable rows")
-                    break
-                if response.status_code not in {429, 500, 502, 503, 504} or attempt == 1:
-                    quality.append(f"Yahoo quote batch HTTP {response.status_code}")
-                    break
-                time.sleep(1.5 * (attempt + 1))
-            except Exception as exc:
-                quality.append("Yahoo quote batch unavailable: " + str(exc)[:180])
-                break
-    return {}
-
-
-def _yahoo_batch_spark() -> dict[str, dict]:
-    symbols = ",".join(YAHOO_SYMBOLS.values())
-    headers = {"User-Agent": UA, "Accept": "application/json,text/plain,*/*"}
-    for endpoint in YAHOO_SPARK_ENDPOINTS:
-        try:
-            response = requests.get(
-                endpoint,
-                params={
-                    "symbols": symbols,
-                    "range": "5d",
-                    "interval": "1d",
-                    "indicators": "close",
-                    "includeTimestamps": "true",
-                    "includePrePost": "false",
-                    "corsDomain": "finance.yahoo.com",
-                },
-                headers=headers,
-                timeout=20,
-                verify=False,
-            )
-            if not response.ok:
-                continue
-            rows = response.json().get("spark", {}).get("result", [])
-            by_symbol = {v: k for k, v in YAHOO_SYMBOLS.items()}
-            out = {}
-            for row in rows:
-                for response_item in row.get("response", []):
-                    symbol = response_item.get("meta", {}).get("symbol")
-                    label = by_symbol.get(symbol)
-                    closes = (
-                        response_item.get("indicators", {})
-                        .get("quote", [{}])[0]
-                        .get("close", [])
-                    )
-                    closes = [float(x) for x in closes if x is not None]
-                    if label and len(closes) >= 2 and closes[-2] != 0:
-                        out[label] = {
-                            "last": closes[-1],
-                            "prev": closes[-2],
-                            "pct": (closes[-1] / closes[-2] - 1.0) * 100.0,
-                            "source": "Yahoo Finance",
-                        }
-            if out:
-                return out
-        except Exception:
-            continue
-    return {}
-
-
 def collect_market_data() -> dict:
-    global _GLOBAL_CACHE
     data = {"fetched_at": datetime.now(IST).isoformat(), "global": {}, "india": {}, "quality": []}
     nse = {}
 
@@ -252,10 +128,14 @@ def collect_market_data() -> dict:
             pct = _float_value(row.get("percChange"))
             if not name or last is None or prev in (None, 0):
                 continue
-            item = {"last": last, "prev": prev, "pct": pct if pct is not None else (last / prev - 1) * 100}
+            item = {
+                "last": last,
+                "prev": prev,
+                "pct": pct if pct is not None else (last / prev - 1) * 100,
+                "source": "NSE",
+            }
             data["india"][name] = item
             nse[name.upper()] = item
-
     except Exception as exc:
         data["quality"].append("NSE index data unavailable: " + str(exc)[:240])
 
@@ -267,31 +147,18 @@ def collect_market_data() -> dict:
         pct = _float_value(g.get("perchange") or g.get("perChange") or g.get("pct"))
         if last is not None:
             nifty = nse.get("NIFTY 50")
-            vs_nifty = ((last / nifty["last"]) - 1) * 100 if nifty and nifty.get("last") else None
-            data["global"]["GIFT Nifty"] = {"last": last, "pct": pct or 0.0, "vs_nifty_close_pct": vs_nifty, "source": "NSE"}
+            data["global"]["GIFT Nifty"] = {
+                "last": last,
+                "pct": pct if pct is not None else 0.0,
+                "vs_nifty_close_pct": ((last / nifty["last"]) - 1) * 100 if nifty and nifty.get("last") else None,
+                "source": "NSE",
+            }
     except Exception as exc:
         data["quality"].append("GIFT Nifty unavailable: " + str(exc)[:180])
 
-    # One batched request replaces the previous 11 sequential Yahoo requests.
-    now = time.monotonic()
-    global_rows = _GLOBAL_CACHE[1] if _GLOBAL_CACHE and now - _GLOBAL_CACHE[0] < GLOBAL_CACHE_TTL else None
-    if global_rows is None:
-        global_rows = _yahoo_batch_quotes()
-        if not global_rows:
-            global_rows = _yahoo_batch_spark()
-        if global_rows:
-            _GLOBAL_CACHE = (now, global_rows)
-    if global_rows:
-        for label, item in global_rows.items():
-            if label == "USD/INR":
-                data["india"][label] = item
-            else:
-                data["global"][label] = item
-    else:
-        data["quality"].append("Yahoo global batch unavailable after quote/spark fallback")
-
-    # US 10Y is quoted by Yahoo as a percentage yield (e.g. 5.11), not a price.
-    # Keep that level as-is and let deterministic_analysis measure the bp change.
+    # Global overnight data is obtained in the single Gemini + Google Search
+    # request below. This deliberately removes the eleven-request Yahoo path
+    # that was repeatedly hitting 429 rate limits on Railway.
     for name, short in [
         ("NIFTY BANK", "Bank Nifty"), ("NIFTY IT", "Nifty IT"),
         ("NIFTY FMCG", "Nifty FMCG"), ("NIFTY AUTO", "Nifty Auto"),
@@ -299,15 +166,17 @@ def collect_market_data() -> dict:
         ("NIFTY METAL", "Nifty Metal"), ("NIFTY PHARMA", "Nifty Pharma"),
         ("NIFTY REALTY", "Nifty Realty"), ("NIFTY OIL & GAS", "Nifty Oil & Gas"),
         ("NIFTY PVT BANK", "Nifty Private Bank"),
+        ("INDIA VIX", "India VIX"),
     ]:
         if name in nse:
             data["india"][short] = nse[name]
 
     # Normalize India VIX casing across NSE payload variants.
-    for key, value in list(data["india"].items()):
-        if key.upper().replace("_", " ") == "INDIA VIX":
-            data["india"]["India VIX"] = value
-            break
+    if "India VIX" not in data["india"]:
+        for key, value in list(data["india"].items()):
+            if key.upper().replace("_", " ") == "INDIA VIX":
+                data["india"]["India VIX"] = value
+                break
 
     try:
         rows = _nse_json("fiidiiTradeReact")
@@ -421,6 +290,9 @@ def _gemini(api_key: str, market: dict, baseline: dict, model: str):
 {NEWS_INSTRUCTION}
 
 The current time is {datetime.now(IST).isoformat()}.
+
+Important: perform the Google Search grounding yourself in this request. Do not
+rely on model memory for any current global market value or current headline.
 
 MARKET DATA (authoritative for numbers):
 {json.dumps(market, indent=2)}
