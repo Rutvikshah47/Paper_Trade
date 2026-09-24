@@ -346,8 +346,10 @@ def _pct(item) -> float:
     return float(item.get("pct") or 0) if item else 0.0
 
 
-def _signal(value: float, threshold: float, up_positive: bool = True) -> float:
-    if not value or abs(value) < threshold:
+def _signal(value: float | None, threshold: float, up_positive: bool = True) -> float | None:
+    if value is None:
+        return None
+    if abs(value) < threshold:
         return 0.0
     strength = min(2.0, abs(value) / threshold)
     direction = 1 if value > 0 else -1
@@ -358,38 +360,60 @@ def _signal(value: float, threshold: float, up_positive: bool = True) -> float:
 
 def deterministic_analysis(data: dict) -> dict:
     g, i = data["global"], data["india"]
+    def _yield_change_bp(item: dict | None):
+        if not item:
+            return None
+        last, prev = item.get("last"), item.get("prev")
+        if last is None or prev is None:
+            return None
+        return (float(last) - float(prev)) * 100.0
+
     factors = {
-        "us10y": _signal(
-            ((float(g.get("US 10Y", {}).get("last")) - float(g.get("US 10Y", {}).get("prev"))) * 100)
-            if g.get("US 10Y") and g.get("US 10Y").get("prev") is not None else 0.0,
-            5.0,
-            False,
-        ),
-        "dxy": _signal(_pct(g.get("DXY")), 0.4, False),
-        "nasdaq": _signal(_pct(g.get("Nasdaq")), 0.5),
-        "dow": _signal(_pct(g.get("Dow")), 0.5),
-        "nikkei": _signal(_pct(g.get("Nikkei")), 0.5),
-        "hangseng": _signal(_pct(g.get("Hang Seng")), 0.5),
-        "shanghai": _signal(_pct(g.get("Shanghai")), 0.5),
-        "brent": _signal(_pct(g.get("Brent")), 2.0, False),
-        "gold": _signal(_pct(g.get("Gold")), 1.5),
-        "usdinr": _signal(_pct(i.get("USD/INR")), 0.3, False),
-        "vix": _signal(_pct(i.get("India VIX")), 5.0, False),
-        "nifty": _signal(_pct(i.get("Nifty 50")), 0.7),
-        "fii": 1.0 if (i.get("FII", {}).get("last") or 0) >= 500 else -1.0 if (i.get("FII", {}).get("last") or 0) <= -500 else 0.0,
+        "us10y": _signal(_yield_change_bp(g.get("US 10Y")), 5.0, False),
+        "dxy": _signal(_pct(g.get("DXY")) if g.get("DXY") else None, 0.4, False),
+        "nasdaq": _signal(_pct(g.get("Nasdaq")) if g.get("Nasdaq") else None, 0.5),
+        "dow": _signal(_pct(g.get("Dow")) if g.get("Dow") else None, 0.5),
+        "nikkei": _signal(_pct(g.get("Nikkei")) if g.get("Nikkei") else None, 0.5),
+        "hangseng": _signal(_pct(g.get("Hang Seng")) if g.get("Hang Seng") else None, 0.5),
+        "shanghai": _signal(_pct(g.get("Shanghai")) if g.get("Shanghai") else None, 0.5),
+        "brent": _signal(_pct(g.get("Brent")) if g.get("Brent") else None, 2.0, False),
+        "gold": _signal(_pct(g.get("Gold")) if g.get("Gold") else None, 1.5),
+        "usdinr": _signal(_pct(i.get("USD/INR")) if i.get("USD/INR") else None, 0.3, False),
+        "vix": _signal(_pct(i.get("India VIX")) if i.get("India VIX") else None, 5.0, False),
+        "nifty": _signal(_pct(i.get("NIFTY 50")) if i.get("NIFTY 50") else None, 0.7),
+        "fii": (
+            1.0 if (i.get("FII", {}).get("last") or 0) >= 500
+            else -1.0 if (i.get("FII", {}).get("last") or 0) <= -500
+            else 0.0
+        ) if i.get("FII") else None,
     }
-    weights = {"us10y":2,"dxy":1,"nasdaq":1.5,"dow":1,"nikkei":1,"hangseng":1,"shanghai":0.75,"brent":1.5,"gold":0.5,"usdinr":1,"vix":1,"nifty":1,"fii":1.5}
-    total = sum(factors[k] * weights[k] for k in factors)
-    denom = sum(weights.values()) or 1
-    pressure = round(max(-100, min(100, total / denom * 50)), 1)
+
+    weights = {
+        "us10y": 2, "dxy": 1, "nasdaq": 1.5, "dow": 1, "nikkei": 1,
+        "hangseng": 1, "shanghai": 0.75, "brent": 1.5, "gold": 0.5,
+        "usdinr": 1, "vix": 1, "nifty": 1, "fii": 1.5,
+    }
+
+    available = [k for k, value in factors.items() if value is not None]
+    active_weight = sum(weights[k] for k in available)
+    total_weight = sum(weights.values()) or 1
+    total = sum(factors[k] * weights[k] for k in available)
+    pressure = round(max(-100, min(100, total / (active_weight or 1) * 50)), 1)
+    coverage_pct = round(active_weight / total_weight * 100, 1)
 
     sector_scores = {}
     for sector in SECTORS:
         raw = 0.0
         for factor, sensitivity in SENSITIVITY.get(sector, {}).items():
-            raw += factors.get(factor, 0) * sensitivity * 25
+            raw += (factors.get(factor) or 0.0) * sensitivity * 25
         sector_scores[sector] = round(max(-100, min(100, raw)), 1)
-    return {"pressure": pressure, "sector_scores": sector_scores, "factors": factors}
+
+    return {
+        "pressure": pressure,
+        "sector_scores": sector_scores,
+        "factors": factors,
+        "factor_coverage_pct": coverage_pct,
+    }
 
 
 def _gemini(api_key: str, market: dict, baseline: dict, model: str):
@@ -540,8 +564,15 @@ def generate_report(api_key: str = "") -> dict:
             "reason": "Deterministic macro and market sensitivity baseline.",
         })
 
+    fallback_mood = (
+        "Bullish" if baseline["pressure"] >= 30 else
+        "Cautious Positive" if baseline["pressure"] >= 10 else
+        "Neutral / Mixed" if baseline["pressure"] > -10 else
+        "Cautious Negative" if baseline["pressure"] > -30 else
+        "Bearish"
+    )
     report = {
-        "market_mood": "Neutral / Mixed",
+        "market_mood": fallback_mood,
         "summary": "Indian market data collected. Gemini adds grounded global cues, news and sector read-through when configured.",
         "outlook": "Watch GIFT Nifty, global cues, US yields, Brent, USD/INR, India VIX and FII flows.",
         "confidence": 60,
