@@ -136,6 +136,11 @@ function MarketIntelligence({apiUrl}){
         {report.sources?.length?<div className="mi-sources"><strong>Sources</strong>{report.sources.slice(0,10).map((x,i)=><a href={x.url} target="_blank" rel="noreferrer" key={i}>{x.title||x.url}</a>)}</div>:null}
       </section>
 
+      <section className="mi-section">
+        <div className="mi-section-head"><div><h2>Market scenarios</h2><span>Conditional paths based on observable triggers · no made-up probabilities</span></div><span className="mi-source">AI OUTLOOK</span></div>
+        <div className="mi-scenario-grid">{(report.scenarios||[]).map((x,i)=><div className={'mi-scenario scenario-'+i} key={x.name||i}><div className="mi-scenario-name">{x.name}</div><strong>{x.trigger}</strong><p>{x.read_through}</p></div>)}{!(report.scenarios||[]).length?<div className="mi-muted">No scenario analysis returned.</div>:null}</div>
+      </section>
+
       <section className="mi-bottom-grid">
         <div className="mi-section">
           <div className="mi-section-head"><div><h2>Today's outlook</h2><span>Conditional read-through, not a guaranteed prediction</span></div></div>
