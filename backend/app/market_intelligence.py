@@ -83,9 +83,14 @@ REPORT_SCHEMA = {
         }, "required": ["headline", "source", "impact", "sectors", "summary"]}},
         "watchlist": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
         "events": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+        "scenarios": {"type": "array", "maxItems": 3, "items": {"type": "object", "properties": {
+            "name": {"type": "string", "enum": ["Constructive", "Base case", "Cautious"]},
+            "trigger": {"type": "string"},
+            "read_through": {"type": "string"}
+        }, "required": ["name", "trigger", "read_through"]}},
         "data_quality": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
     },
-    "required": ["market_mood", "summary", "outlook", "confidence", "drivers", "sector_impacts", "news_items", "watchlist", "events", "data_quality"],
+    "required": ["market_mood", "summary", "outlook", "confidence", "drivers", "sector_impacts", "news_items", "watchlist", "events", "scenarios", "data_quality"],
 }
 
 
@@ -264,7 +269,10 @@ DETERMINISTIC BASELINE:
 Search for fresh news from the last 24 hours and today's events. Cover India,
 US, Asia, Europe, central banks, inflation/rates, crude/energy, geopolitics,
 trade/tariffs, major Indian company or sector developments, and anything that
-could materially affect Indian equities.
+could materially affect Indian equities. Also assess the three conditional
+scenarios: Constructive, Base case, and Cautious. Each scenario must name the
+observable trigger and the India-market read-through. Do not assign made-up
+probabilities.
 
 Return structured JSON only. Keep the supplied numeric market data unchanged.
 For each sector, start from its deterministic baseline score and use ai_adjustment
@@ -341,6 +349,9 @@ def generate_report(api_key: str = "") -> dict:
         "news_items": [],
         "watchlist": ["GIFT Nifty", "Nifty 50", "Bank Nifty", "India VIX", "USD/INR", "Brent"],
         "events": [],
+        "scenarios": [
+            {"name": "Base case", "trigger": "Current macro mix persists", "read_through": "Mixed session with sector rotation driven by rates, crude and global cues."}
+        ],
         "data_quality": [],
         "sources": [],
     }
