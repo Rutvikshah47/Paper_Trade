@@ -366,6 +366,65 @@ def _upstox_global_snapshot() -> tuple[dict[str, dict], list[str]]:
 
         quality.append(f"Upstox global quote unavailable: {display} ({key})")
 
+    # Some global quote responses may omit prev_close_price even though the
+    # instrument is valid. Use the documented Historical Candle V3 API to
+    # recover the previous daily close without replacing a live LTP.
+    history_url = "https://api.upstox.com/v3/historical-candle"
+    for display, info in resolved.items():
+        item = result.get(display)
+        if item and item.get("prev") not in (None, 0):
+            continue
+        key = info["instrument_key"]
+        try:
+            today = datetime.now(IST).date()
+            to_date = today.isoformat()
+            from_date = (today - timedelta(days=7)).isoformat()
+            encoded_key = requests.utils.quote(key, safe="")
+            response = requests.get(
+                f"{history_url}/{encoded_key}/days/1/{to_date}/{from_date}",
+                headers=headers,
+                timeout=15,
+                verify=settings.upstox_verify_ssl,
+            )
+            if not response.ok:
+                quality.append(
+                    f"Upstox Historical Candle fallback rejected {display} ({key}): "
+                    f"HTTP {response.status_code} {response.text[:300]}"
+                )
+                continue
+            candles = ((response.json().get("data") or {}).get("candles") or [])
+            if not isinstance(candles, list):
+                continue
+            # API examples return newest candles first, but sort defensively by
+            # timestamp so the latest completed/current candle is deterministic.
+            valid = [row for row in candles if isinstance(row, list) and len(row) >= 5]
+            valid.sort(key=lambda row: str(row[0]))
+            if not valid:
+                continue
+            latest = _float_value(valid[-1][4])
+            previous = _float_value(valid[-2][4]) if len(valid) >= 2 else None
+            if latest is None:
+                continue
+            existing = result.get(display)
+            if existing:
+                if existing.get("prev") in (None, 0) and previous not in (None, 0):
+                    existing["prev"] = previous
+                    existing["pct"] = ((existing["last"] / previous) - 1) * 100
+                    existing["prev_source"] = "Upstox Historical Candle V3"
+            else:
+                pct = ((latest / previous) - 1) * 100 if previous not in (None, 0) else None
+                result[display] = {
+                    "last": latest,
+                    "prev": previous,
+                    "pct": pct,
+                    "source": "Upstox Global Historical Candle V3",
+                    "instrument_key": key,
+                }
+        except Exception as exc:
+            quality.append(
+                f"Upstox Historical Candle fallback failed {display} ({key}): {str(exc)[:180]}"
+            )
+
     return result, quality
 
 def collect_market_data() -> dict:
@@ -753,7 +812,7 @@ def generate_report(api_key: str = "") -> dict:
     )
     report = {
         "market_mood": fallback_mood,
-        "summary": "Indian market data collected. Gemini adds grounded global cues, news and sector read-through when configured.",
+        "summary": "Indian market data comes from NSE and global numeric market data comes from Upstox. Gemini is used for market-news synthesis and contextual read-through when configured.",
         "outlook": "Watch GIFT Nifty, global cues, US yields, Brent, USD/INR, India VIX and FII flows.",
         "confidence": 60,
         "drivers": _rule_news(baseline),
@@ -799,7 +858,7 @@ def generate_report(api_key: str = "") -> dict:
                     "rule_score": score,
                     "ai_adjustment": 0,
                     "confidence": 60,
-                    "reason": "Deterministic baseline using NSE data plus search-verified global cues.",
+                    "reason": "Deterministic baseline using NSE data plus Upstox global market data.",
                 })
 
             report.update(ai)
@@ -921,7 +980,7 @@ def generate_report(api_key: str = "") -> dict:
                         report["global_cues"].append({"name": "USD/INR", **market["india"]["USD/INR"]})
                     report["data_quality"] = list(dict.fromkeys(
                         (market.get("quality") or [])
-                        + ["Gemini 2.5 unavailable; used free-tier Gemini 3.8 with Google News RSS fallback."]
+                        + ["Gemini 2.5 unavailable; used the configured free-tier Gemini 3.x model with Google News RSS fallback."]
                         + (report.get("data_quality") or [])
                     ))[:12]
                 except Exception as fallback_exc:
