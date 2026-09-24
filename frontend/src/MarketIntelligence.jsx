@@ -32,11 +32,27 @@ function SectorImpact({item}){
 function NewsCard({item}){
   const impact=item.impact||'medium'
   return <article className={'mi-news-card '+impact}>
-    <div className="mi-news-meta"><span className={'impact-badge '+impact}>{impact}</span><span>{item.source}</span></div>
+    <div className="mi-news-meta"><span className={'impact-badge '+impact}>{impact}</span><span>{item.source||'Google News'}</span></div>
     <h4>{item.headline}</h4>
-    <p>{item.summary}</p>
+    <p>{item.summary||'Fresh market headline captured from the configured news feed.'}</p>
     {item.sectors?.length?<div className="mi-tags">{item.sectors.map(x=><span key={x}>{x}</span>)}</div>:null}
   </article>
+}
+
+function GlobalCoverage({items}){
+  const expected=['Nasdaq','Dow','S&P 500','Nikkei','Hang Seng','Shanghai','Brent','Gold','DXY','US 10Y','USD/INR']
+  const byName=new Map((items||[]).map(x=>[x.name,x]))
+  return <div className="mi-global-coverage">
+    {expected.map(name=>{
+      const item=byName.get(name)
+      const value=item?.name==='US 10Y' ? fmtNum(item.last,2)+'%' : item?.name==='USD/INR' ? '₹'+fmtNum(item.last,2) : fmtNum(item?.last,2)
+      return <div className={'mi-global-card '+(item?'available':'missing')} key={name}>
+        <div className="mi-global-name">{name}</div>
+        <strong>{item?value:'Not verified'}</strong>
+        <span className={item?toneForPct(item.pct):'neutral'}>{item?fmtPct(item.pct):'Awaiting verified value'}</span>
+      </div>
+    })}
+  </div>
 }
 
 function MarketIntelligence({apiUrl}){
@@ -82,6 +98,7 @@ function MarketIntelligence({apiUrl}){
   const breadth=india.find(x=>x.name==='Breadth')
   const nifty=india.find(x=>x.name==='Nifty 50')
   const vix=india.find(x=>x.name==='India VIX')
+  const primaryIndia=useMemo(()=>india.filter(x=>!['FII','DII','Breadth'].includes(x.name)),[india])
 
   return <main className="mi-page">
     <section className="mi-header">
@@ -106,17 +123,17 @@ function MarketIntelligence({apiUrl}){
       <section className="mi-section">
         <div className="mi-section-head"><div><h2>Global overnight cues</h2><span>Latest fetched values used as inputs to the analysis</span></div><span className="mi-source">LIVE DATA</span></div>
         <div className="mi-cue-grid">{global.map(x=><CueCard item={x} key={x.name}/>)}</div>
+        <div className="mi-subsection-title">Global market coverage</div>
+        <GlobalCoverage items={global}/>
       </section>
 
       <section className="mi-section">
         <div className="mi-section-head"><div><h2>India market snapshot</h2><span>NSE indices, breadth and institutional flows</span></div></div>
         <div className="mi-india-grid">
-          <div className="mi-big-stat"><span>Nifty 50</span><strong>{nifty?.last==null?'—':fmtNum(nifty.last,0)}</strong><small className={toneForPct(nifty?.pct)}>{fmtPct(nifty?.pct)}</small></div>
-          <div className="mi-big-stat"><span>Bank Nifty</span><strong>{fmtNum(india.find(x=>x.name==='Bank Nifty')?.last,0)}</strong><small className={toneForPct(india.find(x=>x.name==='Bank Nifty')?.pct)}>{fmtPct(india.find(x=>x.name==='Bank Nifty')?.pct)}</small></div>
-          <div className="mi-big-stat"><span>India VIX</span><strong>{fmtNum(vix?.last,2)}</strong><small className={toneForPct(vix?.pct)}>{fmtPct(vix?.pct)}</small></div>
-          <div className="mi-big-stat"><span>FII</span><strong>{fmtCr(fii?.last)}</strong><small>Latest reported session</small></div>
-          <div className="mi-big-stat"><span>DII</span><strong>{fmtCr(dii?.last)}</strong><small>Latest reported session</small></div>
-          <div className="mi-big-stat"><span>Market breadth</span><strong>{breadth?breadth.advances+':'+breadth.declines:'—'}</strong><small>Advances : Declines</small></div>
+          {primaryIndia.map(x=><div className="mi-big-stat" key={x.name}><span>{x.name}</span><strong>{fmtNum(x.last, x.name.includes('VIX')?2:0)}</strong><small className={toneForPct(x.pct)}>{fmtPct(x.pct)}</small></div>)}
+          <div className="mi-big-stat institutional"><span>FII</span><strong>{fmtCr(fii?.last)}</strong><small>Latest reported session</small></div>
+          <div className="mi-big-stat institutional"><span>DII</span><strong>{fmtCr(dii?.last)}</strong><small>Latest reported session</small></div>
+          <div className="mi-big-stat institutional"><span>Market breadth</span><strong>{breadth?breadth.advances+':'+breadth.declines:'—'}</strong><small>{breadth?breadth.advances+' advances · '+breadth.declines+' declines · '+(breadth.unchanged||0)+' unchanged':'No breadth data'}</small></div>
         </div>
       </section>
 
@@ -135,14 +152,14 @@ function MarketIntelligence({apiUrl}){
       </section>
 
       <section className="mi-section">
-        <div className="mi-section-head"><div><h2>News intelligence</h2><span>Fresh web-grounded news with India sector read-through</span></div><span className="mi-source">GOOGLE SEARCH</span></div>
+        <div className="mi-section-head"><div><h2>News intelligence</h2><span>Fresh web-grounded news with India sector read-through</span></div><span className="mi-source">{report.generated_by?.includes('Google News RSS')?'GOOGLE NEWS RSS':'GROUNDED SEARCH'}</span></div>
         {report.news_items?.length?<div className="mi-news-grid">{report.news_items.map((x,i)=><NewsCard item={x} key={i}/>)}</div>:<div className="mi-muted">No grounded news returned. Check data quality below and refresh.</div>}
         {report.sources?.length?<div className="mi-sources"><strong>Sources</strong>{report.sources.slice(0,10).map((x,i)=><a href={x.url} target="_blank" rel="noreferrer" key={i}>{x.title||x.url}</a>)}</div>:null}
       </section>
 
       <section className="mi-section">
         <div className="mi-section-head"><div><h2>Market scenarios</h2><span>Conditional paths based on observable triggers · no made-up probabilities</span></div><span className="mi-source">AI OUTLOOK</span></div>
-        <div className="mi-scenario-grid">{(report.scenarios||[]).map((x,i)=><div className={'mi-scenario scenario-'+i} key={x.name||i}><div className="mi-scenario-name">{x.name}</div><strong>{x.trigger}</strong><p>{x.read_through}</p></div>)}{!(report.scenarios||[]).length?<div className="mi-muted">No scenario analysis returned.</div>:null}</div>
+        <div className="mi-scenario-grid">{(report.scenarios||[]).map((x,i)=><div className={'mi-scenario scenario-'+i} key={x.name||i}><div className="mi-scenario-name">{x.name}</div><div className="mi-scenario-label">Trigger</div><strong>{x.trigger||x.observable_trigger||'No trigger returned.'}</strong><div className="mi-scenario-label">India read-through</div><p>{x.read_through||x.india_market_readthrough||'No read-through returned.'}</p></div>)}{!(report.scenarios||[]).length?<div className="mi-muted">No scenario analysis returned.</div>:null}</div>
       </section>
 
       <section className="mi-bottom-grid">
