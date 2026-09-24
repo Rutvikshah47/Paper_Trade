@@ -21,7 +21,7 @@ from .db import Base, SessionLocal, engine, get_db
 from .instrument import InstrumentResolutionError, UpstoxInstrumentResolver
 from .market import MarketDataService
 from .models import MarketBar, MarketReport, PaperOrder, RiskSnapshot, Strategy, StrategyEvent
-from .market_intelligence import generate_report
+from .market_intelligence import generate_report, gemini_status
 from .pnl import order_pnl
 from .risk import calculate_strategy_risk
 from .schemas import AdjustmentCreate, DashboardView, ExitCreate, MarketReportView, OrderView, RiskSnapshotView, RiskView, StrategyCreate, StrategyView, StrategyEventView
@@ -671,6 +671,7 @@ def health() -> dict[str, Any]:
         'environment': os.getenv('RAILWAY_ENVIRONMENT_NAME', 'unknown'),
         'deployment': os.getenv('RAILWAY_DEPLOYMENT_ID', 'unknown'),
         'git_commit': os.getenv('RAILWAY_GIT_COMMIT_SHA', 'unknown'),
+        'gemini': gemini_status(),
         'last_market_error': market.last_error,
     }
 
