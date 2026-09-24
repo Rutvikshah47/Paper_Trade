@@ -58,3 +58,92 @@ body{font-size:15px;line-height:1.45}h1,h2,h3,h4{font-family:var(--font-display)
 @media(max-width:1100px){.mi-cue-grid{grid-template-columns:repeat(3,1fr)}.mi-india-grid{grid-template-columns:repeat(3,1fr)}.mi-sector-columns,.mi-bottom-grid{grid-template-columns:1fr}.mi-news-grid{grid-template-columns:1fr}.mi-mood{grid-template-columns:1fr 1fr}.mi-mood-main{grid-column:1/-1;border-right:0;border-bottom:1px solid #edf0f3;padding:0 0 12px}.mi-driver-list{grid-template-columns:1fr}}
 @media(max-width:780px){.mi-page{width:calc(100% - 20px);margin:20px auto 40px}.mi-header{align-items:flex-start;flex-direction:column}.mi-header-actions{width:100%;flex-wrap:wrap}.mi-cue-grid,.mi-india-grid{grid-template-columns:1fr 1fr}.mi-mood{grid-template-columns:1fr}.mi-mood-main{border-bottom:1px solid #edf0f3}.nav-button{font-size:10px;padding:7px 6px}}
 @media(max-width:520px){.mi-cue-grid,.mi-india-grid,.mi-driver-list{grid-template-columns:1fr}.mi-header h1{font-size:23px}.mi-mood h2{font-size:21px}.mi-section{padding:12px}.mi-source{display:none}}
+
+
+/* Market Intelligence readability pass */
+.mi-page{width:min(1540px,calc(100% - 48px));margin:30px auto 64px}
+.mi-header{margin-bottom:22px;align-items:flex-end}
+.mi-header h1{font-size:32px;letter-spacing:-.8px}
+.mi-header p{font-size:13px;max-width:720px}
+.mi-header-actions{flex-wrap:wrap;justify-content:flex-end}
+.mi-updated{font-size:10px;background:#f8fafc;border:1px solid #e7ebf1;border-radius:7px;padding:6px 8px}
+.mi-mood{grid-template-columns:minmax(0,1.7fr) 190px 190px;padding:22px;margin-bottom:18px}
+.mi-mood h2{font-size:30px}
+.mi-mood p{font-size:13px;max-width:760px}
+.mi-score{padding:4px 8px 4px 18px;border-left:1px solid #edf0f3}
+.mi-score strong{font-size:29px}
+.mi-section{padding:20px 21px;margin-bottom:16px;border-radius:15px}
+.mi-section-head{margin-bottom:16px}
+.mi-section-head h2{font-size:19px}
+.mi-section-head span{font-size:10px}
+.mi-cue-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.mi-cue{padding:14px;border-radius:11px;min-height:88px}
+.mi-cue-name{font-size:9px}
+.mi-cue strong{font-size:19px}
+.mi-change{font-size:10px}
+.mi-subsection-title{margin:18px 0 9px;font-size:10px;font-weight:850;text-transform:uppercase;letter-spacing:.7px;color:#778294}
+.mi-global-coverage{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+.mi-global-card{padding:11px 12px;border:1px solid #e4e8ee;border-radius:10px;background:#fbfcfd;min-height:76px}
+.mi-global-card.available{background:#f8fbff;border-color:#dce7f5}
+.mi-global-card.missing{background:#fafbfc;border-style:dashed}
+.mi-global-name{font-size:9px;color:#778294;font-weight:750}
+.mi-global-card strong{display:block;font-size:15px;margin-top:7px}
+.mi-global-card span{display:block;font-size:9px;margin-top:3px}
+.mi-india-grid{grid-template-columns:repeat(5,minmax(0,1fr));gap:9px}
+.mi-big-stat{padding:14px;border-radius:10px;min-height:91px}
+.mi-big-stat span{font-size:9px}
+.mi-big-stat strong{font-size:19px}
+.mi-big-stat small{font-size:9px;line-height:1.35}
+.mi-big-stat.institutional{background:#f8fbff;border-color:#dce7f5}
+.mi-driver-list{gap:9px}
+.mi-driver{padding:13px;border-radius:10px}
+.mi-driver strong{font-size:11px}
+.mi-driver p{font-size:10px}
+.mi-sector-columns{gap:16px}
+.mi-column-title{font-size:11px;margin-bottom:9px}
+.mi-sector{padding:12px 13px;margin-bottom:8px}
+.mi-sector-top strong{font-size:11px}
+.mi-sector-bottom small{font-size:9px;line-height:1.35}
+.mi-all-sectors{grid-template-columns:repeat(3,1fr);gap:9px}
+.mi-news-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
+.mi-news-card{padding:14px;min-height:145px}
+.mi-news-card h4{font-size:13px;line-height:1.4}
+.mi-news-card p{font-size:10px;line-height:1.5}
+.mi-news-meta{font-size:9px}
+.mi-sources{display:grid;grid-template-columns:auto repeat(2,minmax(0,1fr));align-items:start;gap:9px 14px}
+.mi-sources a{max-width:none;white-space:normal;font-size:9px;line-height:1.35}
+.mi-scenario-grid{gap:11px}
+.mi-scenario{padding:16px;min-height:190px}
+.mi-scenario-name{font-size:10px}
+.mi-scenario-label{margin-top:12px;font-size:8px;text-transform:uppercase;letter-spacing:.55px;font-weight:850;color:#8993a1}
+.mi-scenario strong{font-size:12px;line-height:1.5}
+.mi-scenario p{font-size:10px;line-height:1.55}
+.mi-bottom-grid{gap:16px}
+.mi-outlook{font-size:12px}
+.mi-watch span{font-size:9px;padding:6px 9px}
+.mi-event-list{font-size:10px}
+.mi-quality{font-size:9px}
+.mi-history-list button{min-width:155px;padding:11px}
+@media(max-width:1200px){
+  .mi-global-coverage{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .mi-india-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .mi-all-sectors{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:900px){
+  .mi-mood{grid-template-columns:1fr 1fr}
+  .mi-mood-main{grid-column:1/-1}
+  .mi-cue-grid,.mi-global-coverage{grid-template-columns:repeat(3,1fr)}
+  .mi-india-grid{grid-template-columns:repeat(3,1fr)}
+}
+@media(max-width:620px){
+  .mi-page{width:calc(100% - 24px);margin:20px auto 44px}
+  .mi-header h1{font-size:25px}
+  .mi-cue-grid,.mi-global-coverage,.mi-india-grid,.mi-news-grid,.mi-scenario-grid{grid-template-columns:1fr 1fr}
+  .mi-mood{grid-template-columns:1fr}
+  .mi-mood-main{grid-column:auto}
+  .mi-score{border-left:0;border-top:1px solid #edf0f3;padding:14px 0 0}
+  .mi-sources{grid-template-columns:1fr}
+}
+@media(max-width:430px){
+  .mi-cue-grid,.mi-global-coverage,.mi-india-grid,.mi-news-grid,.mi-scenario-grid{grid-template-columns:1fr}
+}
