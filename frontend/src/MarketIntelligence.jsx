@@ -57,6 +57,15 @@ function GlobalCoverage({items}){
   </div>
 }
 
+function QuickMetric({label,value,sub,tone='neutral',accent=''}){
+  return <div className={`mi-quick-card ${accent}`}><span>{label}</span><strong className={tone}>{value}</strong>{sub?<small>{sub}</small>:null}</div>
+}
+
+function QuickNav(){
+  const links=[['global','Global'],['india','India'],['drivers','Drivers'],['sectors','Sectors'],['news','News'],['scenarios','Scenarios']]
+  return <nav className="mi-quick-nav">{links.map(([id,label])=><a key={id} href={`#mi-${id}`}>{label}</a>)}</nav>
+}
+
 function MarketIntelligence({apiUrl}){
   const [report,setReport]=useState(null)
   const [history,setHistory]=useState([])
@@ -116,6 +125,92 @@ function MarketIntelligence({apiUrl}){
 
     {!report?<div className="mi-empty"><strong>No report generated yet</strong><span>Click Generate fresh report to fetch current market data and Gemini-grounded news.</span><button className="button-primary" onClick={generate} disabled={loading}>{loading?'Generating…':'Generate report'}</button></div>:
     <>
+      <QuickNav />
+      <section className="mi-at-glance">
+        <div className="mi-glance-heading"><div><span className="mi-label">AT A GLANCE</span><h2>What matters right now</h2></div><span>Key signals from the latest report</span></div>
+        <div className="mi-quick-grid">
+          <QuickMetric label="Nifty 50" value={fmtNum(nifty?.last,0)} sub={fmtPct(nifty?.pct)} tone={toneForPct(nifty?.pct)} accent="primary"/>
+          <QuickMetric label="GIFT Nifty" value={fmtNum(global.find(x=>x.name==='GIFT Nifty')?.last,0)} sub={fmtPct(global.find(x=>x.name==='GIFT Nifty')?.pct)} tone={toneForPct(global.find(x=>x.name==='GIFT Nifty')?.pct)}/>
+          <QuickMetric label="FII flow" value={fmtCr(fii?.last)} sub="Latest reported session" tone={Number(fii?.last)<0?'negative':'positive'}/>
+          <QuickMetric label="DII flow" value={fmtCr(dii?.last)} sub="Latest reported session" tone={Number(dii?.last)>=0?'positive':'negative'}/>
+          <QuickMetric label="India VIX" value={fmtNum(vix?.last,2)} sub={fmtPct(vix?.pct)} tone={toneForPct(vix?.pct)}/>
+          <QuickMetric label="Brent" value={global.find(x=>x.name==='Brent')?'
+        <div className="mi-mood-main"><span className="mi-label">MARKET MOOD</span><h2>{report.market_mood}</h2><p>{report.summary}</p></div>
+        <div className="mi-score"><span>Market pressure</span><strong className={(report.market_pressure||0)>=0?'positive':'negative'}>{report.market_pressure>0?'+':''}{fmtNum(report.market_pressure,0)}</strong><small>-100 bearish · 0 neutral · +100 positive</small></div>
+        <div className="mi-score"><span>Confidence</span><strong>{fmtNum(report.confidence,0)}%</strong><small>Based on data coverage + news agreement</small></div>
+      </section>
+
+      <section className="mi-section" id="mi-global">
+        <div className="mi-section-head"><div><h2>Global overnight cues</h2><span>Latest fetched values used as inputs to the analysis</span></div><span className="mi-source">LIVE DATA</span></div>
+        <div className="mi-cue-grid">{global.map(x=><CueCard item={x} key={x.name}/>)}</div>
+        <div className="mi-subsection-title">Global market coverage</div>
+        <GlobalCoverage items={[...global, ...india.filter(x=>x.name==='USD/INR')]}/>
+      </section>
+
+      <section className="mi-section" id="mi-india">
+        <div className="mi-section-head"><div><h2>India market snapshot</h2><span>NSE indices, breadth and institutional flows</span></div></div>
+        <div className="mi-india-grid">
+          {primaryIndia.map(x=><div className="mi-big-stat" key={x.name}><span>{x.name}</span><strong>{fmtNum(x.last, x.name.includes('VIX')?2:0)}</strong><small className={toneForPct(x.pct)}>{fmtPct(x.pct)}</small></div>)}
+          <div className="mi-big-stat institutional"><span>FII</span><strong>{fmtCr(fii?.last)}</strong><small>Latest reported session</small></div>
+          <div className="mi-big-stat institutional"><span>DII</span><strong>{fmtCr(dii?.last)}</strong><small>Latest reported session</small></div>
+          <div className="mi-big-stat institutional"><span>Market breadth</span><strong>{breadth?breadth.advances+':'+breadth.declines:'—'}</strong><small>{breadth?breadth.advances+' advances · '+breadth.declines+' declines · '+(breadth.unchanged||0)+' unchanged':'No breadth data'}</small></div>
+        </div>
+      </section>
+
+      <section className="mi-section" id="mi-drivers">
+        <div className="mi-section-head"><div><h2>Why is the market moving?</h2><span>Largest positive and negative drivers identified from the current inputs</span></div><span className="mi-source">RULES + GEMINI</span></div>
+        <div className="mi-driver-list">{(report.drivers||[]).map((d,i)=><div className="mi-driver" key={i}><span className={'driver-symbol '+d.direction}>{d.direction==='positive'?'↑':d.direction==='negative'?'↓':'→'}</span><div><strong>{d.title}</strong><p>{d.explanation}</p></div><b>{d.impact>0?'+':''}{fmtNum(d.impact,0)}</b></div>)}</div>
+      </section>
+
+      <section className="mi-section" id="mi-sectors">
+        <div className="mi-section-head"><div><h2>Sector impact radar</h2><span>Rule-based sensitivity anchored to fresh market data, with explicit AI news adjustments</span></div></div>
+        <div className="mi-sector-columns">
+          <div><div className="mi-column-title positive">Potential support</div>{positiveSectors.length?positiveSectors.map(x=><SectorImpact key={x.sector} item={x}/>):<div className="mi-muted">No strong positive sector signal.</div>}</div>
+          <div><div className="mi-column-title negative">Potential pressure</div>{negativeSectors.length?negativeSectors.map(x=><SectorImpact key={x.sector} item={x}/>):<div className="mi-muted">No strong negative sector signal.</div>}</div>
+        </div>
+        {sectors.length>10?<details className="mi-more"><summary>Show all sectors</summary><div className="mi-all-sectors">{sectors.map(x=><SectorImpact key={x.sector} item={x}/>)}</div></details>:null}
+      </section>
+
+      <section className="mi-section" id="mi-news">
+        <div className="mi-section-head"><div><h2>News intelligence</h2><span>Fresh web-grounded news with India sector read-through</span></div><span className="mi-source">{report.generated_by?.includes('Google News RSS')?'GOOGLE NEWS RSS':'GROUNDED SEARCH'}</span></div>
+        {report.news_items?.length?<div className="mi-news-grid">{report.news_items.map((x,i)=><NewsCard item={x} key={i}/>)}</div>:<div className="mi-muted">No grounded news returned. Check data quality below and refresh.</div>}
+        {report.sources?.length?<div className="mi-sources"><strong>Sources</strong>{report.sources.slice(0,10).map((x,i)=><a href={x.url} target="_blank" rel="noreferrer" key={i}>{x.title||x.url}</a>)}</div>:null}
+      </section>
+
+      <section className="mi-section" id="mi-scenarios">
+        <div className="mi-section-head"><div><h2>Market scenarios</h2><span>Conditional paths based on observable triggers · no made-up probabilities</span></div><span className="mi-source">AI OUTLOOK</span></div>
+        <div className="mi-scenario-grid">{(report.scenarios||[]).map((x,i)=><div className={'mi-scenario scenario-'+i} key={x.name||i}><div className="mi-scenario-name">{x.name}</div><div className="mi-scenario-label">Trigger</div><strong>{x.trigger||x.observable_trigger||'No trigger returned.'}</strong><div className="mi-scenario-label">India read-through</div><p>{x.read_through||x.india_market_readthrough||'No read-through returned.'}</p></div>)}{!(report.scenarios||[]).length?<div className="mi-muted">No scenario analysis returned.</div>:null}</div>
+      </section>
+
+      <section className="mi-bottom-grid">
+        <div className="mi-section">
+          <div className="mi-section-head"><div><h2>Today's outlook</h2><span>Conditional read-through, not a guaranteed prediction</span></div></div>
+          <p className="mi-outlook">{report.outlook}</p>
+          <div className="mi-subheading">Watch</div>
+          <div className="mi-watch">{(report.watchlist||[]).map(x=><span key={x}>{x}</span>)}</div>
+        </div>
+        <div className="mi-section">
+          <div className="mi-section-head"><div><h2>Events & data quality</h2><span>Items that can change the read</span></div></div>
+          <div className="mi-event-list">{(report.events||[]).map((x,i)=><div key={i}>• {x}</div>)}{!(report.events||[]).length?<div className="mi-muted">No additional events returned.</div>:null}</div>
+          {report.data_quality?.length?<div className="mi-quality"><strong>Data notes</strong>{report.data_quality.map((x,i)=><div key={i}>• {x}</div>)}</div>:<div className="mi-quality good">All configured market-data sources returned without recorded quality warnings.</div>}
+        </div>
+      </section>
+
+      <section className="mi-section mi-history">
+        <div className="mi-section-head"><div><h2>Previous reports</h2><span>Every manual generation is saved for comparison</span></div></div>
+        <div className="mi-history-list">{history.map(x=><button key={x.id} onClick={()=>setReport(x)} className={x.id===report.id?'active':''}><strong>{new Date(x.generated_at).toLocaleDateString()}</strong><span>{x.market_mood}</span><b>{x.market_pressure>0?'+':''}{fmtNum(x.market_pressure,0)}</b></button>)}</div>
+      </section>
+    </>}
+  </main>
+}
+
+export default MarketIntelligence
++fmtNum(global.find(x=>x.name==='Brent')?.last,2):'—'} sub={fmtPct(global.find(x=>x.name==='Brent')?.pct)} tone={toneForPct(global.find(x=>x.name==='Brent')?.pct)}/>
+          <QuickMetric label="Breadth" value={breadth?Math.round(breadth.advances/(breadth.declines||1)*100)+' adv/dec':''} sub={breadth?breadth.advances+' advances · '+breadth.declines+' declines':''} tone={breadth && breadth.advances>=breadth.declines?'positive':'negative'}/>
+          <QuickMetric label="Market pressure" value={(report.market_pressure>0?'+':'')+fmtNum(report.market_pressure,0)} sub={report.market_mood} tone={report.market_pressure>=10?'positive':report.market_pressure<=-10?'negative':'neutral'} accent="pressure"/>
+        </div>
+      </section>
+
       <section className="mi-mood">
         <div className="mi-mood-main"><span className="mi-label">MARKET MOOD</span><h2>{report.market_mood}</h2><p>{report.summary}</p></div>
         <div className="mi-score"><span>Market pressure</span><strong className={(report.market_pressure||0)>=0?'positive':'negative'}>{report.market_pressure>0?'+':''}{fmtNum(report.market_pressure,0)}</strong><small>-100 bearish · 0 neutral · +100 positive</small></div>
