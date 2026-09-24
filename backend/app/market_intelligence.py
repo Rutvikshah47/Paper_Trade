@@ -283,12 +283,8 @@ market numbers. Do not give personalized trade instructions.
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "tools": [{"google_search": {}}],
         "generationConfig": {
-            "responseFormat": {
-                "text": {
-                    "mimeType": "application/json",
-                    "schema": REPORT_SCHEMA,
-                }
-            },
+            "response_mime_type": "application/json",
+            "response_schema": REPORT_SCHEMA,
             "temperature": 0.2,
             "maxOutputTokens": 12000,
         },
