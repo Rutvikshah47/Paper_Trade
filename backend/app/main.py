@@ -687,6 +687,19 @@ def dashboard(db: Session = Depends(get_db)):
 
 def _market_report_view(row: MarketReport) -> MarketReportView:
     payload = json.loads(row.payload_json)
+    # Gemini-generated reports may store scenarios as either a list or a
+    # named dictionary. Normalize both shapes to the API's list contract so
+    # older persisted reports remain readable as well.
+    scenarios = payload.get('scenarios', [])
+    if isinstance(scenarios, dict):
+        scenarios = [
+            {'name': name, **value}
+            for name, value in scenarios.items()
+            if isinstance(value, dict)
+        ]
+    elif not isinstance(scenarios, list):
+        scenarios = []
+
     return MarketReportView(
         id=row.id,
         report_date=row.report_date,
@@ -700,7 +713,7 @@ def _market_report_view(row: MarketReport) -> MarketReportView:
         sector_impacts=payload.get('sector_impacts', []),
         news_items=payload.get('news_items', []),
         events=payload.get('events', []),
-        scenarios=payload.get('scenarios', []),
+        scenarios=scenarios,
         watchlist=payload.get('watchlist', []),
         summary=payload.get('summary', ''),
         outlook=payload.get('outlook', ''),
