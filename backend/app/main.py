@@ -54,6 +54,8 @@ _intraday_technical_cache: dict[str, tuple[float, list[SimpleNamespace]]] = {}
 _ws_clients: set[tuple[asyncio.AbstractEventLoop, asyncio.Queue]] = set()
 _ws_lock = RLock()
 _market_intel_lock = RLock()
+_db_write_lock = RLock()
+_risk_compute_lock = RLock()
 DAILY_TECHNICAL_CACHE_TTL = 300.0
 INTRADAY_TECHNICAL_CACHE_TTL = 30.0
 
@@ -61,6 +63,23 @@ INTRADAY_TECHNICAL_CACHE_TTL = 30.0
 # timestamp are legacy strategies; their underlying entry baseline is backfilled
 # from the N-2 completed trading-session close.
 LEGACY_ENTRY_CUTOFF = datetime(2026, 9, 23, 14, 42, 2)
+
+
+def _commit_with_retry(db: Session, retries: int = 6) -> None:
+    """Serialize SQLite writes and retry transient lock errors."""
+    with _db_write_lock:
+        for attempt in range(retries):
+            try:
+                db.commit()
+                return
+            except OperationalError as exc:
+                db.rollback()
+                message = str(exc).lower()
+                if "locked" not in message and "busy" not in message:
+                    raise
+                if attempt == retries - 1:
+                    raise
+                time.sleep(min(2.0, 0.25 * (attempt + 1)))
 
 
 def _ensure_underlying(symbol: str) -> str | None:
@@ -128,7 +147,7 @@ def _on_market_tick(key: str, ltp: float) -> None:
                 db = SessionLocal()
                 try:
                     db.add(MarketBar(**row))
-                    db.commit()
+                    _commit_with_retry(db)
                 except Exception:
                     db.rollback()
                 finally:
@@ -444,7 +463,7 @@ def _backfill_legacy_entry_spots(db: Session) -> None:
         if _legacy_entry_spot(db, strategy) is not None:
             changed = True
     if changed:
-        db.commit()
+        _commit_with_retry(db)
 
 def _risk_for_strategy(db: Session, strategy: Strategy) -> dict[str, Any]:
     key = _ensure_underlying(strategy.orders[0].symbol) if strategy.orders else None
@@ -595,7 +614,7 @@ def _save_risk_snapshots() -> None:
                 pnl=pnl, delta=result['delta'], gamma=result['gamma'], theta=result['theta'], vega=result['vega'],
                 expected_move=result['expected_move'], distance_to_short_pct=result['distance_to_short_pct'], avg_iv=result['avg_iv'],
             ))
-            db.commit()
+            _commit_with_retry(db)
         except Exception as exc:
             db.rollback()
             print(f"[Risk] snapshot failed for strategy {strategy_id}: {exc}")
@@ -604,11 +623,10 @@ def _save_risk_snapshots() -> None:
 
 
 def _risk_loop():
-    # Event is used as a stop flag. Waiting on an already-set Event returns
-    # immediately, which previously created a tight loop and excessive DB load.
-    while _running.is_set():
-        if _running.wait(60):
-            break
+    # _running is a stop event. It remains clear during service lifetime and is
+    # set during shutdown. This gives the risk snapshot service a true 60-second
+    # cadence instead of exiting immediately.
+    while not _running.wait(60):
         _save_risk_snapshots()
 
 
@@ -622,7 +640,6 @@ def startup():
         for symbol in symbols: _ensure_underlying(symbol)
         if keys or symbols: alerts.start()
         _backfill_legacy_entry_spots(db)
-        _running.set()
         global _risk_thread
         _risk_thread = Thread(target=_risk_loop, daemon=True, name='risk-snapshot-service')
         _risk_thread.start()
@@ -633,7 +650,7 @@ def startup():
 
 @app.on_event('shutdown')
 def shutdown():
-    _running.clear()
+    _running.set()
     alerts.stop(); market.stop()
 
 
@@ -716,15 +733,10 @@ def generate_market_intelligence(db: Session = Depends(get_db)):
             payload_json=json.dumps(report, ensure_ascii=False),
         )
         db.add(row)
-        for attempt in range(3):
-            try:
-                db.commit()
-                break
-            except OperationalError as exc:
-                db.rollback()
-                if "locked" not in str(exc).lower() or attempt == 2:
-                    raise HTTPException(503, f'Market report save failed: {exc}') from exc
-                time.sleep(1)
+        try:
+            _commit_with_retry(db)
+        except OperationalError as exc:
+            raise HTTPException(503, f'Market report save failed: {exc}') from exc
         db.refresh(row)
         return _market_report_view(row)
 
@@ -758,7 +770,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
             db.add(PaperOrder(strategy_id=strategy.id,symbol=item.symbol,instrument_key=instrument_key,trading_symbol=trading_symbol,
                 expiry=item.expiry.isoformat(),strike=item.strike,option_type=item.option_type,side=item.side,
                 entry_price=item.entry_price,lots=item.lots,lot_size=lot_size))
-        db.commit(); db.refresh(strategy)
+        _commit_with_retry(db); db.refresh(strategy)
     except (InstrumentResolutionError, KeyError, ValueError, TypeError) as exc:
         db.rollback(); raise HTTPException(400,str(exc)) from exc
     keys=[o.instrument_key for o in strategy.orders]
@@ -777,7 +789,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
             order.current_ltp = live
         elif order.entry_price == 0:
             db.delete(strategy)
-            db.commit()
+            _commit_with_retry(db)
             raise HTTPException(409, f'Live LTP unavailable for {order.trading_symbol or order.symbol}. Please connect the market feed and try again.')
         elif order.current_ltp is None:
             order.current_ltp = order.entry_price
@@ -790,7 +802,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         entry_spot=next((underliers.get(o.instrument_key) for o in strategy.orders if underliers.get(o.instrument_key) is not None), None)
     if entry_spot is None:
         db.delete(strategy)
-        db.commit()
+        _commit_with_retry(db)
         raise HTTPException(409, 'Live underlying LTP unavailable. Please connect the market feed and try again.')
     # Calculate the initial absolute risk immediately. Technical indicators may
     # still be sparse on a brand-new strategy, but distance, Greeks and IV can
@@ -798,7 +810,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
     entry_bars, _ = _risk_bars(db, strategy.orders[0].symbol, entry_key)
     initial_risk = calculate_strategy_risk(strategy, entry_spot, entry_bars)
     _entry_baseline(db, strategy, entry_spot, initial_risk)
-    db.commit()
+    _commit_with_retry(db)
     alerts.start(); return strategy_to_view(strategy)
 
 
@@ -808,7 +820,7 @@ def delete_strategy(strategy_id:int, db:Session=Depends(get_db)):
     if not strategy: raise HTTPException(404,'Strategy not found')
     db.query(RiskSnapshot).filter(RiskSnapshot.strategy_id == strategy_id).delete(synchronize_session=False)
     db.query(StrategyEvent).filter(StrategyEvent.strategy_id == strategy_id).delete(synchronize_session=False)
-    db.delete(strategy); db.commit(); return None
+    db.delete(strategy); _commit_with_retry(db); return None
 
 
 
@@ -862,7 +874,7 @@ def adjust_strategy(strategy_id: int, payload: AdjustmentCreate, db: Session = D
         market.subscribe([instrument_key]); _ensure_underlying(item.symbol)
         _record_event(db, strategy.id, 'ADJUSTMENT', market.get_ltps().get(_underlying_keys.get(item.symbol)), None,
                       payload.reason or f'Added leg {order.id}', {'action':'ADD_LEG','order_id':order.id}, dedupe=False)
-    db.commit(); db.refresh(strategy)
+    _commit_with_retry(db); db.refresh(strategy)
     return strategy_to_view(strategy)
 
 
@@ -892,14 +904,18 @@ def exit_strategy(strategy_id: int, payload: ExitCreate, db: Session = Depends(g
         theta=result.get('theta'), vega=result.get('vega'), expected_move=result.get('expected_move'),
         distance_to_short_pct=result.get('distance_to_short_pct'), avg_iv=result.get('avg_iv'),
     ))
-    db.commit(); db.refresh(strategy)
+    _commit_with_retry(db); db.refresh(strategy)
     return strategy_to_view(strategy)
 
 @app.get('/api/strategies/{strategy_id}/risk', response_model=RiskView)
 def strategy_risk(strategy_id:int, db:Session=Depends(get_db)):
-    strategy=db.query(Strategy).options(joinedload(Strategy.orders)).filter(Strategy.id==strategy_id).first()
-    if not strategy: raise HTTPException(404,'Strategy not found')
-    return _risk_for_strategy(db,strategy)
+    with _risk_compute_lock, db.no_autoflush:
+        strategy=db.query(Strategy).options(joinedload(Strategy.orders)).filter(Strategy.id==strategy_id).first()
+        if not strategy: raise HTTPException(404,'Strategy not found')
+        # This endpoint is intentionally read-only. _risk_for_strategy may
+        # populate transient ORM fields while calculating live values, but
+        # no autoflush/write should occur during a GET request.
+        return _risk_for_strategy(db,strategy)
 
 
 @app.get('/api/strategies/{strategy_id}/risk/history', response_model=list[RiskSnapshotView])
