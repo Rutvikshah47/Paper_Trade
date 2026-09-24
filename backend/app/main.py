@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, joinedload
 
 from .alerts import AlertService
-from .config import settings
+from .config import Settings, settings
 from .db import Base, SessionLocal, engine, get_db
 from .instrument import InstrumentResolutionError, UpstoxInstrumentResolver
 from .market import MarketDataService
@@ -666,8 +666,15 @@ def market_intelligence_history(limit: int = Query(10, ge=1, le=50), db: Session
 
 @app.post('/api/market-intelligence/generate', response_model=MarketReportView)
 def generate_market_intelligence(db: Session = Depends(get_db)):
+    # Re-read environment variables for this request so a host-side variable
+    # update is reflected without relying on a module-level Settings snapshot.
+    runtime_settings = Settings()
+    print(
+        f"[Market Intelligence] Gemini configured={bool(runtime_settings.gemini_api_key)} "
+        f"model={runtime_settings.gemini_model}"
+    )
     try:
-        report = generate_report(settings.gemini_api_key)
+        report = generate_report(runtime_settings.gemini_api_key)
     except Exception as exc:
         raise HTTPException(502, f'Market intelligence generation failed: {exc}') from exc
     generated = datetime.fromisoformat(report['generated_at'])
