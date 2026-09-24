@@ -414,7 +414,8 @@ function App(){
       </div>
     </header>
 
-    {page==='intelligence' ? <MarketIntelligence apiUrl={apiUrl}/> :     <main className="main-content">
+    {page==='intelligence' ? <MarketIntelligence apiUrl={apiUrl}/> : (
+      <main className="main-content">
       {market.last_error?<div className="banner error-banner"><strong>Market data error</strong><span>{market.last_error}</span></div>:null}
       {globalMessage?<div className="banner message-banner">{globalMessage}</div>:null}
 
@@ -435,9 +436,9 @@ function App(){
         <div className="section-heading"><div><h2>Your strategies</h2><span>Each card shows the most important information at a glance.</span></div><button className="button-secondary light" onClick={refresh}>Refresh</button></div>
         {dashboard.strategies.length?<div className="strategy-grid">{dashboard.strategies.map(s=><StrategyCard key={s.id} strategy={s} risk={riskMap[s.id]} onOpen={setSelectedId}/>)}</div>:<div className="empty-dashboard"><strong>No strategies yet</strong><span>Create your first paper strategy to start live risk monitoring.</span><button className="button-primary" onClick={()=>setShowCreate(true)}>Create strategy</button></div>}
       </section>
-    </main>
+      </main>
+    )}
 
-}
 
     <footer className="page-footer"><span>Paper trading only · no real orders are placed</span><span>Risk score is a monitoring model, not a loss probability</span></footer>
 
