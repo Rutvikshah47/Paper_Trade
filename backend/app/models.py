@@ -90,3 +90,15 @@ class StrategyEvent(Base):
     risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     message: Mapped[str] = mapped_column(String(500), default="")
     metadata_json: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+
+
+
+class MarketReport(Base):
+    __tablename__ = "market_reports"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    report_date: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+    market_mood: Mapped[str] = mapped_column(String(40), default="UNKNOWN")
+    market_pressure: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    payload_json: Mapped[str] = mapped_column(String(50000), nullable=False)
