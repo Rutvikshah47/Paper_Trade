@@ -540,7 +540,7 @@ market numbers. Do not give personalized trade instructions.
 def _rule_news(baseline: dict) -> list[dict]:
     drivers = []
     for factor, value in baseline["factors"].items():
-        if abs(value) < 0.5:
+        if value is None or abs(value) < 0.5:
             continue
         direction = "positive" if value > 0 else "negative"
         drivers.append({"direction": direction, "title": factor, "explanation": "Material move in this market factor.", "impact": round(value * 25, 1)})
