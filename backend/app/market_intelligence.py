@@ -12,6 +12,14 @@ from .config import settings
 
 IST = ZoneInfo("Asia/Kolkata")
 NSE_HOME = "https://www.nseindia.com"
+YAHOO_QUOTE_ENDPOINTS = [
+    "https://query2.finance.yahoo.com/v7/finance/quote",
+    "https://query1.finance.yahoo.com/v7/finance/quote",
+]
+YAHOO_SPARK_ENDPOINTS = [
+    "https://query2.finance.yahoo.com/v7/finance/spark",
+    "https://query1.finance.yahoo.com/v7/finance/spark",
+]
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36"
 NSE_VERIFY_SSL = os.getenv("NSE_VERIFY_SSL", "true").strip().lower() not in {"0", "false", "no", "off"}
 SECTORS = [
