@@ -556,10 +556,31 @@ def _historical_probability(db: Session, strategy_id: int) -> dict[str, Any] | N
 
 
 def _save_risk_snapshots() -> None:
-    db = SessionLocal()
+    # Do not hold one SQLite transaction while calculating every strategy and
+    # making network calls. Each strategy gets a short-lived write transaction.
+    seed_db = SessionLocal()
     try:
-        strategies = db.query(Strategy).options(joinedload(Strategy.orders)).filter(Strategy.status == 'OPEN').all()
-        for strategy in strategies:
+        strategy_ids = [
+            row[0]
+            for row in seed_db.query(Strategy.id)
+            .filter(Strategy.status == 'OPEN')
+            .order_by(Strategy.id.asc())
+            .all()
+        ]
+    finally:
+        seed_db.close()
+
+    for strategy_id in strategy_ids:
+        db = SessionLocal()
+        try:
+            strategy = (
+                db.query(Strategy)
+                .options(joinedload(Strategy.orders))
+                .filter(Strategy.id == strategy_id, Strategy.status == 'OPEN')
+                .first()
+            )
+            if not strategy:
+                continue
             result = _risk_for_strategy(db, strategy)
             previous = db.query(RiskSnapshot).filter(
                 RiskSnapshot.strategy_id == strategy.id
@@ -572,15 +593,20 @@ def _save_risk_snapshots() -> None:
                 pnl=pnl, delta=result['delta'], gamma=result['gamma'], theta=result['theta'], vega=result['vega'],
                 expected_move=result['expected_move'], distance_to_short_pct=result['distance_to_short_pct'], avg_iv=result['avg_iv'],
             ))
-        db.commit()
-    except Exception as exc:
-        db.rollback(); print(f"[Risk] snapshot failed: {exc}")
-    finally:
-        db.close()
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            print(f"[Risk] snapshot failed for strategy {strategy_id}: {exc}")
+        finally:
+            db.close()
 
 
 def _risk_loop():
-    while _running.wait(60):
+    # Event is used as a stop flag. Waiting on an already-set Event returns
+    # immediately, which previously created a tight loop and excessive DB load.
+    while _running.is_set():
+        if _running.wait(60):
+            break
         _save_risk_snapshots()
 
 
