@@ -18,10 +18,11 @@ from .config import settings
 from .db import Base, SessionLocal, engine, get_db
 from .instrument import InstrumentResolutionError, UpstoxInstrumentResolver
 from .market import MarketDataService
-from .models import MarketBar, PaperOrder, RiskSnapshot, Strategy, StrategyEvent
+from .models import MarketBar, MarketReport, PaperOrder, RiskSnapshot, Strategy, StrategyEvent
+from .market_intelligence import generate_report
 from .pnl import order_pnl
 from .risk import calculate_strategy_risk
-from .schemas import AdjustmentCreate, DashboardView, ExitCreate, OrderView, RiskSnapshotView, RiskView, StrategyCreate, StrategyView, StrategyEventView
+from .schemas import AdjustmentCreate, DashboardView, ExitCreate, MarketReportView, OrderView, RiskSnapshotView, RiskView, StrategyCreate, StrategyView, StrategyEventView
 
 Base.metadata.create_all(bind=engine)
 
@@ -624,6 +625,65 @@ def dashboard(db: Session = Depends(get_db)):
     return DashboardView(strategies=views,total_pnl=round(sum(s.pnl for s in views),2),
         open_orders=sum(1 for s in views for o in s.orders if o.status == 'OPEN'),
         market_data_mode='mock' if settings.use_mock_market_data else 'upstox')
+
+
+def _market_report_view(row: MarketReport) -> MarketReportView:
+    payload = json.loads(row.payload_json)
+    return MarketReportView(
+        id=row.id,
+        report_date=row.report_date,
+        generated_at=row.generated_at,
+        market_mood=row.market_mood,
+        market_pressure=row.market_pressure,
+        confidence=row.confidence,
+        global_cues=payload.get('global_cues', []),
+        india_snapshot=payload.get('india_snapshot', []),
+        drivers=payload.get('drivers', []),
+        sector_impacts=payload.get('sector_impacts', []),
+        news_items=payload.get('news_items', []),
+        events=payload.get('events', []),
+        watchlist=payload.get('watchlist', []),
+        summary=payload.get('summary', ''),
+        outlook=payload.get('outlook', ''),
+        sources=payload.get('sources', []),
+        data_quality=payload.get('data_quality', []),
+        generated_by=payload.get('generated_by', 'rule-engine'),
+    )
+
+
+@app.get('/api/market-intelligence/latest', response_model=MarketReportView | None)
+def latest_market_intelligence(db: Session = Depends(get_db)):
+    row = db.query(MarketReport).order_by(MarketReport.generated_at.desc()).first()
+    if not row:
+        return None
+    return _market_report_view(row)
+
+
+@app.get('/api/market-intelligence/history', response_model=list[MarketReportView])
+def market_intelligence_history(limit: int = Query(10, ge=1, le=50), db: Session = Depends(get_db)):
+    rows = db.query(MarketReport).order_by(MarketReport.generated_at.desc()).limit(limit).all()
+    return [_market_report_view(x) for x in rows]
+
+
+@app.post('/api/market-intelligence/generate', response_model=MarketReportView)
+def generate_market_intelligence(db: Session = Depends(get_db)):
+    try:
+        report = generate_report(settings.gemini_api_key)
+    except Exception as exc:
+        raise HTTPException(502, f'Market intelligence generation failed: {exc}') from exc
+    generated = datetime.fromisoformat(report['generated_at'])
+    row = MarketReport(
+        report_date=report['report_date'],
+        generated_at=generated,
+        market_mood=report.get('market_mood', 'UNKNOWN'),
+        market_pressure=report.get('market_pressure'),
+        confidence=report.get('confidence'),
+        payload_json=json.dumps(report, ensure_ascii=False),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _market_report_view(row)
 
 
 @app.get('/api/strategies', response_model=list[StrategyView])
