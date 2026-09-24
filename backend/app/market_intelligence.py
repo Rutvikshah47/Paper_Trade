@@ -12,7 +12,6 @@ from .config import settings
 
 IST = ZoneInfo("Asia/Kolkata")
 NSE_HOME = "https://www.nseindia.com"
-YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36"
 NSE_VERIFY_SSL = os.getenv("NSE_VERIFY_SSL", "true").strip().lower() not in {"0", "false", "no", "off"}
 SECTORS = [
@@ -346,7 +345,10 @@ def generate_report(api_key: str = "") -> dict:
                 (market.get("quality") or []) + (report.get("data_quality") or [])
             ))[:12]
         except Exception as exc:
-            market["quality"].insert(0, "Gemini unavailable: " + str(exc)[:1000])
+            error = str(exc)[:1000]
+            market["quality"].insert(0, "Gemini unavailable: " + error)
+            report["generated_by"] = f"rule-engine (Gemini failed: {runtime_model})"
+            report["summary"] = "Gemini Search synthesis failed; showing the rule-based market report and the failure reason in Data Quality."
 
     report["report_date"] = datetime.now(IST).date().isoformat()
     report["generated_at"] = datetime.now(IST).isoformat()
@@ -357,6 +359,7 @@ def generate_report(api_key: str = "") -> dict:
         (market.get("quality") or []) + (report.get("data_quality") or [])
     ))[:12]
     if not runtime_api_key:
+        report["generated_by"] = "rule-engine (Gemini not configured)"
         report["data_quality"].insert(0, "Gemini disabled: GEMINI_API_KEY is not available to the running process.")
     report.setdefault("generated_by", "rule-engine")
     return report
