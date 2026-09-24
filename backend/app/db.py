@@ -3,6 +3,7 @@ import os
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.pool import NullPool
 
 DB_PATH = Path(
     os.environ.get(
@@ -14,10 +15,10 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 engine = create_engine(
     f"sqlite:///{DB_PATH}",
+    poolclass=NullPool,
     connect_args={
         "check_same_thread": False,
-        # Wait for a concurrent writer instead of failing immediately with
-        # "database is locked".
+        # Give concurrent requests time to wait for SQLite's single writer.
         "timeout": 30,
     },
 )
