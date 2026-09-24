@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import time
@@ -193,6 +194,110 @@ def _nse_json(path: str):
 
 
 
+def _upstox_global_snapshot() -> tuple[dict[str, dict], list[str]]:
+    """Load Upstox's official global-instrument master and quote supported globals."""
+    if not settings.upstox_access_token:
+        return {}, ["Upstox global data unavailable: UPSTOX_ACCESS_TOKEN is not configured."]
+
+    master_url = "https://assets.upstox.com/market-quote/instruments/exchange/global.json.gz"
+    quote_url = "https://api.upstox.com/v3/market-quote/quotes"
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {settings.upstox_access_token}",
+    }
+    quality = []
+    try:
+        response = requests.get(
+            master_url,
+            headers={"Accept": "application/json"},
+            timeout=20,
+            verify=settings.upstox_verify_ssl,
+        )
+        response.raise_for_status()
+        instruments = json.loads(gzip.decompress(response.content).decode("utf-8"))
+        if not isinstance(instruments, list):
+            raise ValueError("global instrument file is not a JSON list")
+    except Exception as exc:
+        return {}, [f"Upstox global instrument master unavailable: {str(exc)[:220]}"]
+
+    wanted = {
+        "GIFT Nifty": ["GIFT NIFTY"],
+        "Dow": ["DOW JONES", "US 30"],
+        "S&P 500": ["S&P", "S&P 500"],
+        "Nasdaq": ["US TECH 100", "NASDAQ"],
+        "Nikkei": ["NIKKEI 225", "NIKKEI"],
+        "Hang Seng": ["HANG SENG"],
+        "Shanghai": ["SHANGHAI"],
+        "Brent": ["OIL (BRENT)", "BRENT"],
+        "USD/INR": ["USD INR", "USD/INR"],
+    }
+    normalized = []
+    for row in instruments:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or row.get("trading_symbol") or "").strip()
+        key = str(row.get("instrument_key") or "").strip()
+        if name and key:
+            normalized.append((name.upper(), key, name))
+
+    resolved = {}
+    for display, aliases in wanted.items():
+        match = None
+        for alias in aliases:
+            match = next((x for x in normalized if x[0] == alias), None)
+            if match:
+                break
+        if not match:
+            for alias in aliases:
+                match = next((x for x in normalized if alias in x[0]), None)
+                if match:
+                    break
+        if match:
+            resolved[display] = {"instrument_key": match[1], "master_name": match[2]}
+        else:
+            quality.append(f"Upstox global instrument not published: {display}")
+
+    if not resolved:
+        return {}, quality
+
+    try:
+        response = requests.get(
+            quote_url,
+            headers=headers,
+            params={"instrument_key": ",".join(x["instrument_key"] for x in resolved.values())},
+            timeout=20,
+            verify=settings.upstox_verify_ssl,
+        )
+        response.raise_for_status()
+        quote_data = (response.json().get("data") or {})
+    except Exception as exc:
+        return {}, quality + [f"Upstox global quote request failed: {str(exc)[:220]}"]
+
+    result = {}
+    for display, info in resolved.items():
+        key = info["instrument_key"]
+        row = quote_data.get(key)
+        if not isinstance(row, dict):
+            row = next((v for k, v in quote_data.items() if str(k) == key), None)
+        if not isinstance(row, dict):
+            quality.append(f"Upstox global quote missing: {display}")
+            continue
+        last = _float_value(row.get("last_price") or row.get("lastPrice"))
+        prev = _float_value(row.get("prev_close_price") or row.get("cp"))
+        if last is None:
+            quality.append(f"Upstox global LTP missing: {display}")
+            continue
+        pct = ((last / prev) - 1) * 100 if prev not in (None, 0) else None
+        result[display] = {
+            "last": last,
+            "prev": prev,
+            "pct": pct,
+            "source": "Upstox Global Instruments",
+            "instrument_key": key,
+        }
+    return result, quality
+
+
 def collect_market_data() -> dict:
     data = {"fetched_at": datetime.now(IST).isoformat(), "global": {}, "india": {}, "quality": []}
     nse = {}
@@ -234,9 +339,15 @@ def collect_market_data() -> dict:
     except Exception as exc:
         data["quality"].append("GIFT Nifty unavailable: " + str(exc)[:180])
 
-    # Global overnight data is obtained in the single Gemini + Google Search
-    # request below. This deliberately removes the eleven-request Yahoo path
-    # that was repeatedly hitting 429 rate limits on Railway.
+    # Global overnight numeric values come directly from Upstox's official
+    # Global Instruments feed. This removes the old Yahoo/Gemini-number path.
+    global_quotes, global_quality = _upstox_global_snapshot()
+    for name, item in global_quotes.items():
+        if name == "USD/INR":
+            data["india"][name] = item
+        else:
+            data["global"][name] = item
+    data["quality"].extend(global_quality)
     for name, short in [
         ("NIFTY BANK", "Bank Nifty"), ("NIFTY IT", "Nifty IT"),
         ("NIFTY FMCG", "Nifty FMCG"), ("NIFTY AUTO", "Nifty Auto"),
@@ -599,27 +710,14 @@ def generate_report(api_key: str = "") -> dict:
                 runtime_model,
                 news_context=fallback_news,
             )
-            search_global = ai.get("global_cues") or []
-            if isinstance(search_global, dict):
-                search_global = [search_global]
-            if not isinstance(search_global, list):
-                search_global = []
-            for item in search_global:
-                if not isinstance(item, dict):
-                    continue
-                name = str(item.get("name") or "").strip()
-                try:
-                    last = float(item.get("last"))
-                    prev = float(item.get("prev"))
-                    pct = float(item.get("pct"))
-                except (TypeError, ValueError):
-                    continue
-                if not name or prev == 0:
-                    continue
-                if name == "GIFT Nifty":
-                    continue
-                target = market["india"] if name == "USD/INR" else market["global"]
-                target[name] = {"last": last, "prev": prev, "pct": pct, "source": "Gemini Google Search"}
+            # Never let the model overwrite authoritative numeric market data.
+            report["global_cues"] = [
+                {"name": k, **v}
+                for k, v in market["global"].items()
+                if isinstance(v, dict) and v.get("last") is not None
+            ]
+            if market["india"].get("USD/INR", {}).get("last") is not None:
+                report["global_cues"].append({"name": "USD/INR", **market["india"]["USD/INR"]})
 
             baseline = deterministic_analysis(market)
             sectors = []
@@ -690,6 +788,13 @@ def generate_report(api_key: str = "") -> dict:
             report["sector_impacts"] = sorted(merged, key=lambda x: -abs(x["score"]))
             source_label = "Google News RSS" if runtime_model.startswith("gemini-3") else "Google Search"
             report["generated_by"] = f"rule-engine + {runtime_model} + {source_label}"
+            report["global_cues"] = [
+                {"name": k, **v}
+                for k, v in market["global"].items()
+                if isinstance(v, dict) and v.get("last") is not None
+            ]
+            if market["india"].get("USD/INR", {}).get("last") is not None:
+                report["global_cues"].append({"name": "USD/INR", **market["india"]["USD/INR"]})
             verified_global = sum(
                 1 for name in (
                     "Nasdaq", "Dow", "S&P 500", "Nikkei", "Hang Seng",
@@ -736,6 +841,13 @@ def generate_report(api_key: str = "") -> dict:
                         ]
                     report["sources"] = (sources or fallback_sources)[:15]
                     report["generated_by"] = f"rule-engine + {fallback_model} + Google News RSS"
+                    report["global_cues"] = [
+                        {"name": k, **v}
+                        for k, v in market["global"].items()
+                        if isinstance(v, dict) and v.get("last") is not None
+                    ]
+                    if market["india"].get("USD/INR", {}).get("last") is not None:
+                        report["global_cues"].append({"name": "USD/INR", **market["india"]["USD/INR"]})
                     report["data_quality"] = list(dict.fromkeys(
                         (market.get("quality") or [])
                         + ["Gemini 2.5 unavailable; used free-tier Gemini 3.8 with Google News RSS fallback."]
