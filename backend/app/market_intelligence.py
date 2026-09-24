@@ -478,8 +478,16 @@ market numbers. Do not give personalized trade instructions.
     if not candidates:
         raise RuntimeError("Gemini returned no candidates")
     candidate = candidates[0]
-    parts = candidate.get("content", {}).get("parts", [])
-    text = "".join(p.get("text", "") for p in parts).strip()
+    content = candidate.get("content") or {}
+    parts = content.get("parts", []) if isinstance(content, dict) else []
+    if isinstance(parts, dict):
+        parts = [parts]
+    if isinstance(parts, str):
+        parts = [{"text": parts}]
+    text = "".join(
+        p.get("text", "") if isinstance(p, dict) else str(p)
+        for p in parts
+    ).strip()
     if not text:
         raise RuntimeError("Gemini returned no text; finishReason=" + str(candidate.get("finishReason", "unknown")))
     if text.startswith("```"):
@@ -488,6 +496,8 @@ market numbers. Do not give personalized trade instructions.
         result = json.loads(text)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Gemini returned invalid JSON: {text[:1200]}") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError(f"Gemini returned JSON of type {type(result).__name__}; expected object")
     sources = []
     grounding = (
         candidate.get("groundingMetadata")
@@ -495,8 +505,14 @@ market numbers. Do not give personalized trade instructions.
         or {}
     )
     chunks = grounding.get("groundingChunks") or grounding.get("grounding_chunks") or []
+    if isinstance(chunks, dict):
+        chunks = [chunks]
     for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
         web = chunk.get("web") or {}
+        if not isinstance(web, dict):
+            continue
         uri, title = web.get("uri"), web.get("title")
         if uri and not any(x["url"] == uri for x in sources):
             sources.append({"title": title or uri, "url": uri})
@@ -572,7 +588,13 @@ def generate_report(api_key: str = "") -> dict:
                 news_context=fallback_news,
             )
             search_global = ai.get("global_cues") or []
+            if isinstance(search_global, dict):
+                search_global = [search_global]
+            if not isinstance(search_global, list):
+                search_global = []
             for item in search_global:
+                if not isinstance(item, dict):
+                    continue
                 name = str(item.get("name") or "").strip()
                 try:
                     last = float(item.get("last"))
@@ -601,7 +623,7 @@ def generate_report(api_key: str = "") -> dict:
                 })
 
             report.update(ai)
-            report["sources"] = sources[:15]
+            report["sources"] = (sources or fallback_sources)[:15]
             # Keep machine-observed data-quality notes alongside any AI notes.
             report["data_quality"] = list(dict.fromkeys(
                 (market.get("quality") or []) + (report.get("data_quality") or [])
@@ -609,10 +631,24 @@ def generate_report(api_key: str = "") -> dict:
             # Preserve the deterministic baseline as the anchor. The AI may only
             # contribute the explicit adjustment field.
             merged = []
-            ai_by_sector = {str(x.get("sector")): x for x in report.get("sector_impacts", [])}
+            ai_sector_rows = report.get("sector_impacts", [])
+            if isinstance(ai_sector_rows, dict):
+                ai_sector_rows = [ai_sector_rows]
+            if not isinstance(ai_sector_rows, list):
+                ai_sector_rows = []
+            ai_by_sector = {
+                str(x.get("sector")): x
+                for x in ai_sector_rows
+                if isinstance(x, dict) and x.get("sector")
+            }
             for sector_row in sectors:
                 item = ai_by_sector.get(sector_row["sector"], {})
-                adjustment = max(-20, min(20, float(item.get("ai_adjustment", 0) or 0)))
+                raw_adjustment = item.get("ai_adjustment", 0) if isinstance(item, dict) else 0
+                raw_confidence = item.get("confidence", 60) if isinstance(item, dict) else 60
+                try:
+                    adjustment = max(-20, min(20, float(raw_adjustment or 0)))
+                except (TypeError, ValueError):
+                    adjustment = 0.0
                 final_score = max(-100, min(100, round(sector_row["rule_score"] + adjustment, 1)))
                 merged.append({
                     "sector": sector_row["sector"],
@@ -620,11 +656,12 @@ def generate_report(api_key: str = "") -> dict:
                     "score": final_score,
                     "rule_score": sector_row["rule_score"],
                     "ai_adjustment": adjustment,
-                    "confidence": max(0, min(100, float(item.get("confidence", 60) or 60))),
-                    "reason": item.get("reason") or sector_row["reason"],
+                    "confidence": max(0, min(100, float(raw_confidence or 60))),
+                    "reason": (item.get("reason") if isinstance(item, dict) else None) or sector_row["reason"],
                 })
             report["sector_impacts"] = sorted(merged, key=lambda x: -abs(x["score"]))
-            report["generated_by"] = f"rule-engine + {runtime_model} + Google Search"
+            source_label = "Google News RSS" if runtime_model.startswith("gemini-3") else "Google Search"
+            report["generated_by"] = f"rule-engine + {runtime_model} + {source_label}"
             verified_global = sum(
                 1 for name in (
                     "Nasdaq", "Dow", "S&P 500", "Nikkei", "Hang Seng",
@@ -646,7 +683,7 @@ def generate_report(api_key: str = "") -> dict:
             # model and feed it fresh public RSS headlines instead of paid Search
             # grounding. This keeps the report useful without requiring billing.
             if runtime_model.startswith("gemini-2.5"):
-                fallback_model = "gemini-3.8-flash"
+                fallback_model = "gemini-3.1-flash-lite"
                 try:
                     fallback_news, fallback_sources = _google_news_rss()
                     ai, sources = _gemini(
