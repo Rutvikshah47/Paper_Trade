@@ -43,6 +43,12 @@ REPORT_SCHEMA = {
             "type": "string",
             "enum": ["Bullish", "Cautious Positive", "Neutral / Mixed", "Cautious Negative", "Bearish"]
         },
+        "global_cues": {"type": "array", "maxItems": 12, "items": {"type": "object", "properties": {
+            "name": {"type": "string"},
+            "last": {"type": "number"},
+            "prev": {"type": "number"},
+            "pct": {"type": "number"}
+        }, "required": ["name", "last", "prev", "pct"]}},
         "summary": {"type": "string"},
         "outlook": {"type": "string"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 100},
@@ -76,7 +82,7 @@ REPORT_SCHEMA = {
         }, "required": ["name", "trigger", "read_through"]}},
         "data_quality": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
     },
-    "required": ["market_mood", "summary", "outlook", "confidence", "drivers", "sector_impacts", "news_items", "watchlist", "events", "scenarios", "data_quality"],
+    "required": ["market_mood", "global_cues", "summary", "outlook", "confidence", "drivers", "sector_impacts", "news_items", "watchlist", "events", "scenarios", "data_quality"],
 }
 
 
@@ -92,107 +98,6 @@ def _nse_json(path: str):
     response = s.get(f"{NSE_HOME}/api/{path}", timeout=15, verify=False)
     response.raise_for_status()
     return response.json()
-
-
-def _yahoo(symbol: str):
-    encoded = requests.utils.quote(symbol, safe="")
-    response = requests.get(
-        f"{YAHOO_CHART}{encoded}",
-        params={"range": "5d", "interval": "1d", "includePrePost": "true"},
-        headers={"User-Agent": UA},
-        timeout=15,
-        verify=False,
-    )
-    response.raise_for_status()
-    result = (response.json().get("chart", {}).get("result") or [])
-    if not result:
-        return None
-    closes = [x for x in (result[0].get("indicators", {}).get("quote", [{}])[0].get("close") or []) if x is not None]
-    if len(closes) < 2:
-        return None
-    return float(closes[-1]), float(closes[-2])
-
-
-def collect_market_data() -> dict:
-    data = {"fetched_at": datetime.now(IST).isoformat(), "global": {}, "india": {}, "quality": []}
-    nse = {}
-    try:
-        payload = _nse_json("NextApi/apiClient?functionName=getIndexData&&type=All")
-        for row in payload.get("data", []):
-            name = row.get("indexName")
-            if name:
-                data["india"][name] = {
-                    "last": float(row.get("last") or 0),
-                    "prev": float(row.get("previousClose") or 0),
-                    "pct": float(row.get("percChange") or 0),
-                }
-                nse[name] = data["india"][name]
-    except Exception as exc:
-        data["quality"].append("NSE index data unavailable: " + str(exc))
-
-    try:
-        gift = _nse_json("NextApi/apiClient?functionName=getGiftNifty").get("data", {})
-        g = gift.get("giftNifty") or {}
-        if g.get("lastprice"):
-            data["global"]["GIFT Nifty"] = {
-                "last": float(g["lastprice"]),
-                "pct": float(g.get("perchange") or 0),
-                "vs_nifty_close_pct": (
-                    (float(g["lastprice"]) / nse["NIFTY 50"]["last"] - 1) * 100
-                    if "NIFTY 50" in nse and nse["NIFTY 50"]["last"] else None
-                ),
-            }
-    except Exception as exc:
-        data["quality"].append("GIFT Nifty unavailable: " + str(exc))
-
-    for label, symbol in YAHOO_SYMBOLS.items():
-        try:
-            q = _yahoo(symbol)
-            if not q:
-                data["quality"].append(label + " unavailable")
-                continue
-            last, prev = q
-            if label == "US 10Y" and last > 20:
-                last, prev = last / 10, prev / 10
-            data["global" if label not in {"USD/INR"} else "india"][label] = {
-                "last": last, "prev": prev, "pct": (last / prev - 1) * 100
-            }
-        except Exception as exc:
-            data["quality"].append(label + " unavailable: " + str(exc))
-
-    for name, short in [
-        ("NIFTY BANK", "Bank Nifty"), ("NIFTY IT", "Nifty IT"),
-        ("NIFTY FMCG", "Nifty FMCG"), ("NIFTY AUTO", "Nifty Auto"),
-        ("NIFTY FIN SERVICE", "Nifty Financial Services"),
-        ("NIFTY METAL", "Nifty Metal"), ("NIFTY PHARMA", "Nifty Pharma"),
-        ("NIFTY REALTY", "Nifty Realty"), ("NIFTY OIL & GAS", "Nifty Oil & Gas"),
-        ("NIFTY PVT BANK", "Nifty Private Bank"),
-    ]:
-        if name in nse:
-            data["india"][short] = nse[name]
-
-    try:
-        rows = _nse_json("fiidiiTradeReact")
-        for row in rows:
-            cat = str(row.get("category", "")).upper()
-            net = float(str(row.get("netValue", "0")).replace(",", ""))
-            if cat.startswith("FII"):
-                data["india"]["FII"] = {"last": net, "unit": "cr"}
-            elif cat.startswith("DII"):
-                data["india"]["DII"] = {"last": net, "unit": "cr"}
-    except Exception as exc:
-        data["quality"].append("FII/DII unavailable: " + str(exc))
-
-    try:
-        breadth = _nse_json("NextApi/apiClient?functionName=getMarketStatistics").get("data", {}).get("snapshotCapitalMarket", {})
-        data["india"]["Breadth"] = {
-            "advances": int(breadth.get("advances") or 0),
-            "declines": int(breadth.get("declines") or 0),
-            "unchanged": int(breadth.get("unchange") or 0),
-        }
-    except Exception as exc:
-        data["quality"].append("Breadth unavailable: " + str(exc))
-    return data
 
 
 def _pct(item) -> float:
