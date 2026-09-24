@@ -594,27 +594,28 @@ def _save_risk_snapshots() -> None:
     for strategy_id in strategy_ids:
         db = SessionLocal()
         try:
-            strategy = (
-                db.query(Strategy)
-                .options(joinedload(Strategy.orders))
-                .filter(Strategy.id == strategy_id, Strategy.status == 'OPEN')
-                .first()
-            )
-            if not strategy:
-                continue
-            result = _risk_for_strategy(db, strategy)
-            previous = db.query(RiskSnapshot).filter(
-                RiskSnapshot.strategy_id == strategy.id
-            ).order_by(RiskSnapshot.timestamp.desc()).first()
-            _save_event_transitions(db, strategy, result, previous)
-            pnl = strategy_to_view(strategy).pnl
-            db.add(RiskSnapshot(
-                strategy_id=strategy.id, timestamp=datetime.now(timezone.utc),
-                spot=result['spot'], risk_score=result['risk_score'], risk_band=result['risk_band'],
-                pnl=pnl, delta=result['delta'], gamma=result['gamma'], theta=result['theta'], vega=result['vega'],
-                expected_move=result['expected_move'], distance_to_short_pct=result['distance_to_short_pct'], avg_iv=result['avg_iv'],
-            ))
-            _commit_with_retry(db)
+            with _risk_compute_lock:
+                strategy = (
+                    db.query(Strategy)
+                    .options(joinedload(Strategy.orders))
+                    .filter(Strategy.id == strategy_id, Strategy.status == 'OPEN')
+                    .first()
+                )
+                if not strategy:
+                    continue
+                result = _risk_for_strategy(db, strategy)
+                previous = db.query(RiskSnapshot).filter(
+                    RiskSnapshot.strategy_id == strategy.id
+                ).order_by(RiskSnapshot.timestamp.desc()).first()
+                _save_event_transitions(db, strategy, result, previous)
+                pnl = strategy_to_view(strategy).pnl
+                db.add(RiskSnapshot(
+                    strategy_id=strategy.id, timestamp=datetime.now(timezone.utc),
+                    spot=result['spot'], risk_score=result['risk_score'], risk_band=result['risk_band'],
+                    pnl=pnl, delta=result['delta'], gamma=result['gamma'], theta=result['theta'], vega=result['vega'],
+                    expected_move=result['expected_move'], distance_to_short_pct=result['distance_to_short_pct'], avg_iv=result['avg_iv'],
+                ))
+                _commit_with_retry(db)
         except Exception as exc:
             db.rollback()
             print(f"[Risk] snapshot failed for strategy {strategy_id}: {exc}")
@@ -711,8 +712,9 @@ def market_intelligence_history(limit: int = Query(10, ge=1, le=50), db: Session
 
 @app.post('/api/market-intelligence/generate', response_model=MarketReportView)
 def generate_market_intelligence(db: Session = Depends(get_db)):
-    # Serialize manual generation and keep SQLite writes short/retriable.
-    with _market_intel_lock:
+    # Serialize market intelligence with the risk calculation/write pipeline
+    # so SQLite never has two long-lived application writers contending.
+    with _market_intel_lock, _risk_compute_lock:
         runtime_settings = Settings()
         print(
             f"[Market Intelligence] Gemini configured={bool(runtime_settings.gemini_api_key)} "
