@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, joinedload
 
 from .alerts import AlertService
@@ -52,6 +53,7 @@ _daily_technical_cache: dict[str, tuple[float, list[SimpleNamespace]]] = {}
 _intraday_technical_cache: dict[str, tuple[float, list[SimpleNamespace]]] = {}
 _ws_clients: set[tuple[asyncio.AbstractEventLoop, asyncio.Queue]] = set()
 _ws_lock = RLock()
+_market_intel_lock = RLock()
 DAILY_TECHNICAL_CACHE_TTL = 300.0
 INTRADAY_TECHNICAL_CACHE_TTL = 30.0
 
@@ -692,30 +694,39 @@ def market_intelligence_history(limit: int = Query(10, ge=1, le=50), db: Session
 
 @app.post('/api/market-intelligence/generate', response_model=MarketReportView)
 def generate_market_intelligence(db: Session = Depends(get_db)):
-    # Re-read environment variables for this request so a host-side variable
-    # update is reflected without relying on a module-level Settings snapshot.
-    runtime_settings = Settings()
-    print(
-        f"[Market Intelligence] Gemini configured={bool(runtime_settings.gemini_api_key)} "
-        f"model={runtime_settings.gemini_model}"
-    )
-    try:
-        report = generate_report(runtime_settings.gemini_api_key)
-    except Exception as exc:
-        raise HTTPException(502, f'Market intelligence generation failed: {exc}') from exc
-    generated = datetime.fromisoformat(report['generated_at'])
-    row = MarketReport(
-        report_date=report['report_date'],
-        generated_at=generated,
-        market_mood=report.get('market_mood', 'UNKNOWN'),
-        market_pressure=report.get('market_pressure'),
-        confidence=report.get('confidence'),
-        payload_json=json.dumps(report, ensure_ascii=False),
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return _market_report_view(row)
+    # Serialize manual generation and keep SQLite writes short/retriable.
+    with _market_intel_lock:
+        runtime_settings = Settings()
+        print(
+            f"[Market Intelligence] Gemini configured={bool(runtime_settings.gemini_api_key)} "
+            f"model={runtime_settings.gemini_model}"
+        )
+        try:
+            report = generate_report(runtime_settings.gemini_api_key)
+        except Exception as exc:
+            raise HTTPException(502, f'Market intelligence generation failed: {exc}') from exc
+
+        generated = datetime.fromisoformat(report['generated_at'])
+        row = MarketReport(
+            report_date=report['report_date'],
+            generated_at=generated,
+            market_mood=report.get('market_mood', 'UNKNOWN'),
+            market_pressure=report.get('market_pressure'),
+            confidence=report.get('confidence'),
+            payload_json=json.dumps(report, ensure_ascii=False),
+        )
+        db.add(row)
+        for attempt in range(3):
+            try:
+                db.commit()
+                break
+            except OperationalError as exc:
+                db.rollback()
+                if "locked" not in str(exc).lower() or attempt == 2:
+                    raise HTTPException(503, f'Market report save failed: {exc}') from exc
+                time.sleep(1)
+        db.refresh(row)
+        return _market_report_view(row)
 
 
 @app.get('/api/strategies', response_model=list[StrategyView])
