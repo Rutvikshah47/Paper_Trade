@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './style.css'
+import MarketIntelligence from './MarketIntelligence'
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
 const apiUrl = path => API_BASE_URL + path
@@ -275,6 +276,7 @@ function CreateStrategyModal({onCreated,onClose}) {
 function App(){
   const [dashboard,setDashboard]=useState({strategies:[],total_pnl:0,open_orders:0,market_data_mode:'upstox'})
   const [riskMap,setRiskMap]=useState({})
+  const [page,setPage]=useState('dashboard')
   const [selectedId,setSelectedId]=useState(null)
   const [showCreate,setShowCreate]=useState(false)
   const [market,setMarket]=useState({status:'DISCONNECTED',mode:'upstox',subscribed:[],last_error:null})
@@ -408,11 +410,11 @@ function App(){
     <header className="site-header">
       <div className="header-inner">
         <div className="brand"><div className="brand-icon">P</div><div><div className="brand-name">Paper Trader</div><span>Options strategy & risk dashboard</span></div></div>
-        <div className="header-actions"><div className={'feed-status '+(market.status.includes('CONNECTED')?'connected':market.status.startsWith('ERROR')?'error':'')}><span className="feed-dot"/>{market.status}</div><div className={'live-stream '+(streamConnected?'live':'')}><span className="stream-dot"/>{streamConnected?'LIVE PUSH':'RECONNECTING'}</div><button className="button-secondary" onClick={connectMarket} disabled={connecting}>{connecting?'Refreshing…':'Refresh feed'}</button><button className="button-primary" onClick={()=>setShowCreate(true)}>+ New strategy</button></div>
+        <div className="header-actions"><button className={'nav-button '+(page==='dashboard'?'active':'')} onClick={()=>setPage('dashboard')}>Dashboard</button><button className={'nav-button '+(page==='intelligence'?'active':'')} onClick={()=>setPage('intelligence')}>Market Intelligence</button><div className={'feed-status '+(market.status.includes('CONNECTED')?'connected':market.status.startsWith('ERROR')?'error':'')}><span className="feed-dot"/>{market.status}</div><div className={'live-stream '+(streamConnected?'live':'')}><span className="stream-dot"/>{streamConnected?'LIVE PUSH':'RECONNECTING'}</div><button className="button-secondary" onClick={connectMarket} disabled={connecting}>{connecting?'Refreshing…':'Refresh feed'}</button><button className="button-primary" onClick={()=>setShowCreate(true)}>+ New strategy</button></div>
       </div>
     </header>
 
-    <main className="main-content">
+    {page==='intelligence' ? <MarketIntelligence apiUrl={apiUrl}/> :     <main className="main-content">
       {market.last_error?<div className="banner error-banner"><strong>Market data error</strong><span>{market.last_error}</span></div>:null}
       {globalMessage?<div className="banner message-banner">{globalMessage}</div>:null}
 
@@ -434,6 +436,8 @@ function App(){
         {dashboard.strategies.length?<div className="strategy-grid">{dashboard.strategies.map(s=><StrategyCard key={s.id} strategy={s} risk={riskMap[s.id]} onOpen={setSelectedId}/>)}</div>:<div className="empty-dashboard"><strong>No strategies yet</strong><span>Create your first paper strategy to start live risk monitoring.</span><button className="button-primary" onClick={()=>setShowCreate(true)}>Create strategy</button></div>}
       </section>
     </main>
+
+}
 
     <footer className="page-footer"><span>Paper trading only · no real orders are placed</span><span>Risk score is a monitoring model, not a loss probability</span></footer>
 
