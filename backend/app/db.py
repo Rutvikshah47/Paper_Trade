@@ -21,9 +21,6 @@ engine = create_engine(
         # Give concurrent requests time to wait for SQLite's single writer.
         "timeout": 30,
     },
-    # Each request gets a short-lived connection. This avoids exhausting
-    # SQLAlchemy's default QueuePool while risk calculations perform network I/O.
-    poolclass=NullPool,
 )
 
 @event.listens_for(engine, "connect")
