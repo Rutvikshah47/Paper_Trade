@@ -106,6 +106,60 @@ def gemini_status() -> dict:
     return dict(_LAST_GEMINI_STATUS)
 
 
+def _google_news_rss() -> tuple[list[dict], list[dict]]:
+    """Fetch fresh public Google News RSS headlines for the free-tier fallback.
+
+    This is intentionally separate from Gemini Search grounding. If the API key
+    cannot access Gemini 2.5 Flash-Lite, Gemini 3.x can still synthesize these
+    fresh headlines without paid Search grounding.
+    """
+    queries = [
+        "India stock market Nifty FII DII RBI",
+        "India stocks sectors corporate news",
+        "US markets Fed yields dollar oil Asia markets",
+    ]
+    items = []
+    sources = []
+    session = requests.Session()
+    session.headers.update({"User-Agent": UA, "Accept": "application/rss+xml,application/xml,text/xml,*/*"})
+    for query in queries:
+        try:
+            from urllib.parse import quote_plus
+            import xml.etree.ElementTree as ET
+            url = "https://news.google.com/rss/search?q=" + quote_plus(query) + "&hl=en-IN&gl=IN&ceid=IN:en"
+            response = session.get(url, timeout=15)
+            response.raise_for_status()
+            root = ET.fromstring(response.content)
+            for node in root.findall("./channel/item")[:8]:
+                title = (node.findtext("title") or "").strip()
+                link = (node.findtext("link") or "").strip()
+                pub = (node.findtext("pubDate") or "").strip()
+                source_node = node.find("source")
+                source = (source_node.text or "").strip() if source_node is not None else "Google News"
+                if not title:
+                    continue
+                items.append({
+                    "headline": title,
+                    "source": source,
+                    "published": pub,
+                    "url": link,
+                })
+                if link and not any(x["url"] == link for x in sources):
+                    sources.append({"title": title, "url": link})
+        except Exception as exc:
+            # Keep the fallback useful even if one RSS query is unavailable.
+            continue
+    unique = []
+    seen = set()
+    for item in items:
+        key = item["headline"].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique[:15], sources[:15]
+
+
 def _session() -> requests.Session:
     s = requests.Session()
     s.headers.update({"User-Agent": UA, "Accept": "*/*", "Referer": NSE_HOME + "/"})
@@ -297,7 +351,7 @@ def deterministic_analysis(data: dict) -> dict:
     }
 
 
-def _gemini(api_key: str, market: dict, baseline: dict, model: str):
+def _gemini(api_key: str, market: dict, baseline: dict, model: str, news_context: list[dict] | None = None):
     global _LAST_GEMINI_STATUS
     _LAST_GEMINI_STATUS = {
         "configured": bool(api_key),
@@ -316,6 +370,9 @@ rely on model memory for any current global market value or current headline.
 
 MARKET DATA (authoritative for numbers):
 {json.dumps(market, indent=2)}
+
+FRESH NEWS CONTEXT (use as source material when present; do not invent beyond it):
+{json.dumps(news_context or [], indent=2)}
 
 DETERMINISTIC BASELINE:
 {json.dumps(baseline, indent=2)}
@@ -343,10 +400,12 @@ For each sector, start from its deterministic baseline score and use ai_adjustme
 (-20 to +20) only for a clear fresh-news reason. Do not invent source URLs or
 market numbers. Do not give personalized trade instructions.
 """
+    use_google_search = not model.startswith("gemini-3")
     base_payload = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "tools": [{"google_search": {}}],
     }
+    if use_google_search:
+        base_payload["tools"] = [{"google_search": {}}]
     # Gemini 2.5 Flash-Lite supports Search grounding and structured output
     # independently, but Google's current docs restrict combining structured
     # outputs with built-in tools to Gemini 3-series models. The free-tier
@@ -504,7 +563,14 @@ def generate_report(api_key: str = "") -> dict:
 
     if runtime_api_key:
         try:
-            ai, sources = _gemini(runtime_api_key, market, baseline, runtime_model)
+            fallback_news, fallback_sources = _google_news_rss() if runtime_model.startswith("gemini-3") else ([], [])
+            ai, sources = _gemini(
+                runtime_api_key,
+                market,
+                baseline,
+                runtime_model,
+                news_context=fallback_news,
+            )
             search_global = ai.get("global_cues") or []
             for item in search_global:
                 name = str(item.get("name") or "").strip()
@@ -575,9 +641,38 @@ def generate_report(api_key: str = "") -> dict:
             ))[:12]
         except Exception as exc:
             error = str(exc)[:1000]
-            market["quality"].insert(0, "Gemini unavailable: " + error)
-            report["generated_by"] = f"rule-engine (Gemini failed: {runtime_model})"
-            report["summary"] = "Gemini Search synthesis failed; showing the rule-based market report and the failure reason in Data Quality."
+            # Google currently limits access to Gemini 2.5 models for some newer
+            # projects. Automatically fall back to a current free-tier Gemini 3
+            # model and feed it fresh public RSS headlines instead of paid Search
+            # grounding. This keeps the report useful without requiring billing.
+            if runtime_model.startswith("gemini-2.5"):
+                fallback_model = "gemini-3.8-flash"
+                try:
+                    fallback_news, fallback_sources = _google_news_rss()
+                    ai, sources = _gemini(
+                        runtime_api_key,
+                        market,
+                        baseline,
+                        fallback_model,
+                        news_context=fallback_news,
+                    )
+                    report.update(ai)
+                    report["sources"] = (sources or fallback_sources)[:15]
+                    report["generated_by"] = f"rule-engine + {fallback_model} + Google News RSS"
+                    report["data_quality"] = list(dict.fromkeys(
+                        (market.get("quality") or [])
+                        + ["Gemini 2.5 unavailable; used free-tier Gemini 3.8 with Google News RSS fallback."]
+                        + (report.get("data_quality") or [])
+                    ))[:12]
+                except Exception as fallback_exc:
+                    market["quality"].insert(0, "Gemini fallback unavailable: " + str(fallback_exc)[:800])
+                    market["quality"].insert(0, "Gemini 2.5 unavailable: " + error)
+                    report["generated_by"] = f"rule-engine (Gemini failed: {runtime_model})"
+                    report["summary"] = "Gemini synthesis failed; showing the rule-based market report and both failure reasons in Data Quality."
+            else:
+                market["quality"].insert(0, "Gemini unavailable: " + error)
+                report["generated_by"] = f"rule-engine (Gemini failed: {runtime_model})"
+                report["summary"] = "Gemini synthesis failed; showing the rule-based market report and the failure reason in Data Quality."
 
     report["report_date"] = datetime.now(IST).date().isoformat()
     report["generated_at"] = datetime.now(IST).isoformat()
