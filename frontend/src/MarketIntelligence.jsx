@@ -124,7 +124,7 @@ function MarketIntelligence({apiUrl}){
         <div className="mi-section-head"><div><h2>Global overnight cues</h2><span>Latest fetched values used as inputs to the analysis</span></div><span className="mi-source">LIVE DATA</span></div>
         <div className="mi-cue-grid">{global.map(x=><CueCard item={x} key={x.name}/>)}</div>
         <div className="mi-subsection-title">Global market coverage</div>
-        <GlobalCoverage items={global}/>
+        <GlobalCoverage items={[...global, ...india.filter(x=>x.name==='USD/INR')]}/>
       </section>
 
       <section className="mi-section">
