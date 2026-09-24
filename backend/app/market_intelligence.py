@@ -106,6 +106,234 @@ def _nse_json(path: str):
     raise RuntimeError(f"NSE request failed: {path}")
 
 
+
+YAHOO_SYMBOLS = {
+    "Nasdaq": "^IXIC",
+    "Dow": "^DJI",
+    "S&P 500": "^GSPC",
+    "Nikkei": "^N225",
+    "Hang Seng": "^HSI",
+    "Shanghai": "000001.SS",
+    "Brent": "BZ=F",
+    "Gold": "GC=F",
+    "DXY": "DX-Y.NYB",
+    "US 10Y": "^TNX",
+    "USD/INR": "INR=X",
+}
+_GLOBAL_CACHE: tuple[float, dict[str, dict]] | None = None
+GLOBAL_CACHE_TTL = 300.0
+
+
+def _float_value(value):
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _yahoo_batch_quotes() -> dict[str, dict]:
+    symbols = ",".join(YAHOO_SYMBOLS.values())
+    headers = {"User-Agent": UA, "Accept": "application/json,text/plain,*/*"}
+    quality = []
+    for endpoint in YAHOO_QUOTE_ENDPOINTS:
+        for attempt in range(2):
+            try:
+                response = requests.get(
+                    endpoint,
+                    params={
+                        "symbols": symbols,
+                        "lang": "en-US",
+                        "region": "US",
+                        "corsDomain": "finance.yahoo.com",
+                    },
+                    headers=headers,
+                    timeout=15,
+                    verify=False,
+                )
+                if response.ok:
+                    rows = response.json().get("quoteResponse", {}).get("result", [])
+                    out = {}
+                    by_symbol = {v: k for k, v in YAHOO_SYMBOLS.items()}
+                    for row in rows:
+                        label = by_symbol.get(row.get("symbol"))
+                        last = _float_value(row.get("regularMarketPrice"))
+                        prev = _float_value(row.get("regularMarketPreviousClose"))
+                        if label and last is not None and prev not in (None, 0):
+                            out[label] = {
+                                "last": last,
+                                "prev": prev,
+                                "pct": (last / prev - 1.0) * 100.0,
+                                "source": "Yahoo Finance",
+                            }
+                    if out:
+                        return out
+                    quality.append("Yahoo quote batch returned no usable rows")
+                    break
+                if response.status_code not in {429, 500, 502, 503, 504} or attempt == 1:
+                    quality.append(f"Yahoo quote batch HTTP {response.status_code}")
+                    break
+                time.sleep(1.5 * (attempt + 1))
+            except Exception as exc:
+                quality.append("Yahoo quote batch unavailable: " + str(exc)[:180])
+                break
+    return {}
+
+
+def _yahoo_batch_spark() -> dict[str, dict]:
+    symbols = ",".join(YAHOO_SYMBOLS.values())
+    headers = {"User-Agent": UA, "Accept": "application/json,text/plain,*/*"}
+    for endpoint in YAHOO_SPARK_ENDPOINTS:
+        try:
+            response = requests.get(
+                endpoint,
+                params={
+                    "symbols": symbols,
+                    "range": "5d",
+                    "interval": "1d",
+                    "indicators": "close",
+                    "includeTimestamps": "true",
+                    "includePrePost": "false",
+                    "corsDomain": "finance.yahoo.com",
+                },
+                headers=headers,
+                timeout=20,
+                verify=False,
+            )
+            if not response.ok:
+                continue
+            rows = response.json().get("spark", {}).get("result", [])
+            by_symbol = {v: k for k, v in YAHOO_SYMBOLS.items()}
+            out = {}
+            for row in rows:
+                for response_item in row.get("response", []):
+                    symbol = response_item.get("meta", {}).get("symbol")
+                    label = by_symbol.get(symbol)
+                    closes = (
+                        response_item.get("indicators", {})
+                        .get("quote", [{}])[0]
+                        .get("close", [])
+                    )
+                    closes = [float(x) for x in closes if x is not None]
+                    if label and len(closes) >= 2 and closes[-2] != 0:
+                        out[label] = {
+                            "last": closes[-1],
+                            "prev": closes[-2],
+                            "pct": (closes[-1] / closes[-2] - 1.0) * 100.0,
+                            "source": "Yahoo Finance",
+                        }
+            if out:
+                return out
+        except Exception:
+            continue
+    return {}
+
+
+def collect_market_data() -> dict:
+    global _GLOBAL_CACHE
+    data = {"fetched_at": datetime.now(IST).isoformat(), "global": {}, "india": {}, "quality": []}
+    nse = {}
+
+    try:
+        payload = _nse_json("NextApi/apiClient?functionName=getIndexData&&type=All")
+        for row in payload.get("data", []) or []:
+            name = str(row.get("indexName") or "").strip()
+            last = _float_value(row.get("last"))
+            prev = _float_value(row.get("previousClose"))
+            pct = _float_value(row.get("percChange"))
+            if not name or last is None or prev in (None, 0):
+                continue
+            item = {"last": last, "prev": prev, "pct": pct if pct is not None else (last / prev - 1) * 100}
+            data["india"][name] = item
+            nse[name.upper()] = item
+
+    except Exception as exc:
+        data["quality"].append("NSE index data unavailable: " + str(exc)[:240])
+
+    try:
+        gift_payload = _nse_json("NextApi/apiClient?functionName=getGiftNifty")
+        gift_data = gift_payload.get("data", {}) if isinstance(gift_payload, dict) else {}
+        g = gift_data.get("giftNifty") or gift_data.get("gift_nifty") or {}
+        last = _float_value(g.get("lastprice") or g.get("lastPrice") or g.get("last"))
+        pct = _float_value(g.get("perchange") or g.get("perChange") or g.get("pct"))
+        if last is not None:
+            nifty = nse.get("NIFTY 50")
+            vs_nifty = ((last / nifty["last"]) - 1) * 100 if nifty and nifty.get("last") else None
+            data["global"]["GIFT Nifty"] = {"last": last, "pct": pct or 0.0, "vs_nifty_close_pct": vs_nifty, "source": "NSE"}
+    except Exception as exc:
+        data["quality"].append("GIFT Nifty unavailable: " + str(exc)[:180])
+
+    # One batched request replaces the previous 11 sequential Yahoo requests.
+    now = time.monotonic()
+    global_rows = _GLOBAL_CACHE[1] if _GLOBAL_CACHE and now - _GLOBAL_CACHE[0] < GLOBAL_CACHE_TTL else None
+    if global_rows is None:
+        global_rows = _yahoo_batch_quotes()
+        if not global_rows:
+            global_rows = _yahoo_batch_spark()
+        if global_rows:
+            _GLOBAL_CACHE = (now, global_rows)
+    if global_rows:
+        for label, item in global_rows.items():
+            if label == "USD/INR":
+                data["india"][label] = item
+            else:
+                data["global"][label] = item
+    else:
+        data["quality"].append("Yahoo global batch unavailable after quote/spark fallback")
+
+    # US 10Y is quoted by Yahoo as a percentage yield (e.g. 5.11), not a price.
+    # Keep that level as-is and let deterministic_analysis measure the bp change.
+    for name, short in [
+        ("NIFTY BANK", "Bank Nifty"), ("NIFTY IT", "Nifty IT"),
+        ("NIFTY FMCG", "Nifty FMCG"), ("NIFTY AUTO", "Nifty Auto"),
+        ("NIFTY FIN SERVICE", "Nifty Financial Services"),
+        ("NIFTY METAL", "Nifty Metal"), ("NIFTY PHARMA", "Nifty Pharma"),
+        ("NIFTY REALTY", "Nifty Realty"), ("NIFTY OIL & GAS", "Nifty Oil & Gas"),
+        ("NIFTY PVT BANK", "Nifty Private Bank"),
+    ]:
+        if name in nse:
+            data["india"][short] = nse[name]
+
+    # Normalize India VIX casing across NSE payload variants.
+    for key, value in list(data["india"].items()):
+        if key.upper().replace("_", " ") == "INDIA VIX":
+            data["india"]["India VIX"] = value
+            break
+
+    try:
+        rows = _nse_json("fiidiiTradeReact")
+        if isinstance(rows, dict):
+            rows = rows.get("data") or []
+        for row in rows or []:
+            cat = str(row.get("category") or row.get("clientType") or "").upper()
+            raw = row.get("netValue")
+            if raw is None:
+                raw = row.get("net_value")
+            net = _float_value(str(raw).replace(",", "") if raw is not None else None)
+            if net is None:
+                continue
+            if cat.startswith("FII") or "FII/FPI" in cat:
+                data["india"]["FII"] = {"last": net, "unit": "cr", "source": "NSE"}
+            elif cat.startswith("DII"):
+                data["india"]["DII"] = {"last": net, "unit": "cr", "source": "NSE"}
+    except Exception as exc:
+        data["quality"].append("FII/DII unavailable: " + str(exc)[:180])
+
+    try:
+        breadth = _nse_json("NextApi/apiClient?functionName=getMarketStatistics")
+        snap = (breadth.get("data", {}) or {}).get("snapshotCapitalMarket", {}) or {}
+        data["india"]["Breadth"] = {
+            "advances": int(snap.get("advances") or 0),
+            "declines": int(snap.get("declines") or 0),
+            "unchanged": int(snap.get("unchange") or snap.get("unchanged") or 0),
+            "source": "NSE",
+        }
+    except Exception as exc:
+        data["quality"].append("Breadth unavailable: " + str(exc)[:180])
+
+    return data
+
 def _pct(item) -> float:
     return float(item.get("pct") or 0) if item else 0.0
 
@@ -191,31 +419,67 @@ For each sector, start from its deterministic baseline score and use ai_adjustme
 (-20 to +20) only for a clear fresh-news reason. Do not invent source URLs or
 market numbers. Do not give personalized trade instructions.
 """
-    payload = {
+    base_payload = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "tools": [{"google_search": {}}],
+    }
+    structured_payload = {
+        **base_payload,
         "generationConfig": {
             "response_mime_type": "application/json",
             "response_schema": REPORT_SCHEMA,
             "temperature": 0.2,
-            "maxOutputTokens": 12000,
+            "maxOutputTokens": 8000,
         },
     }
-    response = None
-    for attempt in range(2):
-        response = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-            json=payload,
-            timeout=90,
-        )
-        if response.ok:
-            break
-        if response.status_code not in {429, 500, 502, 503, 504} or attempt == 1:
-            raise RuntimeError(f"Gemini HTTP {response.status_code}: {response.text[:1200]}")
-        time.sleep(2)
+    plain_payload = {
+        **base_payload,
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 8000,
+        },
+    }
 
-    body = response.json()
+    last_error = None
+    bodies = []
+    models_to_try = [model]
+    if model == "gemini-2.5-flash-lite":
+        models_to_try.append("gemini-2.5-flash")
+
+    for selected_model in models_to_try:
+        for payload_variant in (structured_payload, plain_payload):
+            for attempt in range(2):
+                try:
+                    response = requests.post(
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{selected_model}:generateContent",
+                        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                        json=payload_variant,
+                        timeout=90,
+                    )
+                    if response.ok:
+                        body = response.json()
+                        bodies.append(body)
+                        break
+                    last_error = RuntimeError(
+                        f"Gemini HTTP {response.status_code}: {response.text[:1200]}"
+                    )
+                    if response.status_code in {403, 404}:
+                        break
+                    if response.status_code not in {400, 429, 500, 502, 503, 504} or attempt == 1:
+                        break
+                    time.sleep(2 * (attempt + 1))
+                except Exception as exc:
+                    last_error = exc
+                    break
+            if bodies:
+                break
+        if bodies:
+            break
+
+    if not bodies:
+        raise last_error or RuntimeError("Gemini request failed")
+
+    body = bodies[0]
     candidates = body.get("candidates") or []
     if not candidates:
         raise RuntimeError("Gemini returned no candidates")
@@ -224,12 +488,15 @@ market numbers. Do not give personalized trade instructions.
     text = "".join(p.get("text", "") for p in parts).strip()
     if not text:
         raise RuntimeError("Gemini returned no text; finishReason=" + str(candidate.get("finishReason", "unknown")))
+    if text.startswith("```"):
+        text = text.replace("```json", "", 1).replace("```", "", 1).strip()
     try:
         result = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Gemini returned invalid JSON: {text[:1000]}") from exc
+        raise RuntimeError(f"Gemini returned invalid JSON: {text[:1200]}") from exc
     sources = []
-    chunks = candidate.get("groundingMetadata", {}).get("groundingChunks", [])
+    grounding = candidate.get("groundingMetadata") or {}
+    chunks = grounding.get("groundingChunks") or []
     for chunk in chunks:
         web = chunk.get("web") or {}
         uri, title = web.get("uri"), web.get("title")
