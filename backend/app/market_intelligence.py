@@ -340,7 +340,7 @@ def generate_report(api_key: str = "") -> dict:
         })
 
     report = {
-        "market_mood": "Mixed / Cautious",
+        "market_mood": "Neutral / Mixed",
         "summary": "Fresh market data collected. Add Gemini API access for grounded news synthesis.",
         "outlook": "Watch GIFT Nifty, US yields, Brent, USD/INR, India VIX and FII flows.",
         "confidence": 60,
@@ -383,7 +383,7 @@ def generate_report(api_key: str = "") -> dict:
                     "reason": item.get("reason") or sector_row["reason"],
                 })
             report["sector_impacts"] = sorted(merged, key=lambda x: -abs(x["score"]))
-            report["generated_by"] = "rule-engine + Gemini 3.8 Flash + Google Search"
+            report["generated_by"] = f"rule-engine + {GEMINI_MODEL} + Google Search"
         except Exception as exc:
             market["quality"].append("Gemini unavailable: " + str(exc))
 
@@ -425,4 +425,4 @@ Clearly separate:
 Do not give guaranteed predictions or personalized trade instructions. Never claim
 that a sector or index will definitely rise or fall. Describe the conditions that
 could support or pressure them.
-""
+"""
