@@ -84,7 +84,7 @@ function MarketIntelligence({apiUrl}){
     <section className="mi-header">
       <div><div className="section-kicker">MARKET INTELLIGENCE</div><h1>India pre-market report</h1><p>Fresh global cues, India data, grounded news and sector read-through in one view.</p></div>
       <div className="mi-header-actions">
-        {report?<span className="mi-updated">{report.generated_by?.includes('Gemini')?'Gemini + Google Search':'Rule engine only'} · Updated {new Date(report.generated_at).toLocaleString()}</span>:null}
+        {report?<span className="mi-updated">{report.generated_by?.includes('Gemini failed')?'Gemini failed · Rule engine fallback':report.generated_by?.includes('Gemini')?'Gemini + Google Search':'Rule engine only'} · Updated {new Date(report.generated_at).toLocaleString()}</span>:null}
         <button className="button-primary" onClick={generate} disabled={loading}>{loading?'Gathering markets + news…':'↻ Generate fresh report'}</button>
       </div>
     </section>
