@@ -683,7 +683,7 @@ def generate_report(api_key: str = "") -> dict:
             # model and feed it fresh public RSS headlines instead of paid Search
             # grounding. This keeps the report useful without requiring billing.
             if runtime_model.startswith("gemini-2.5"):
-                fallback_model = "gemini-3.1-flash-lite"
+                fallback_model = "gemini-3.5-flash-lite"
                 try:
                     fallback_news, fallback_sources = _google_news_rss()
                     ai, sources = _gemini(
