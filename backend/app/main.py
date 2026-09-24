@@ -633,6 +633,7 @@ def _risk_loop():
 
 @app.on_event('startup')
 def startup():
+    _running.clear()
     db = next(get_db())
     try:
         keys = [row[0] for row in db.query(PaperOrder.instrument_key).filter(PaperOrder.status == 'OPEN').distinct().all()]
@@ -651,7 +652,7 @@ def startup():
 
 @app.on_event('shutdown')
 def shutdown():
-    _running.clear()
+    _running.set()
     alerts.stop(); market.stop()
 
 
