@@ -642,6 +642,7 @@ def _market_report_view(row: MarketReport) -> MarketReportView:
         sector_impacts=payload.get('sector_impacts', []),
         news_items=payload.get('news_items', []),
         events=payload.get('events', []),
+        scenarios=payload.get('scenarios', []),
         watchlist=payload.get('watchlist', []),
         summary=payload.get('summary', ''),
         outlook=payload.get('outlook', ''),
