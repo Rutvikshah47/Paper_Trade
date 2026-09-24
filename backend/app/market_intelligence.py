@@ -6,11 +6,13 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from .config import settings
+
 IST = ZoneInfo("Asia/Kolkata")
 NSE_HOME = "https://www.nseindia.com"
 YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36"
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = settings.gemini_model
 
 YAHOO_SYMBOLS = {
     "Nasdaq": "^IXIC",
