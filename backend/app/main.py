@@ -651,7 +651,7 @@ def startup():
 
 @app.on_event('shutdown')
 def shutdown():
-    _running.set()
+    _running.clear()
     alerts.stop(); market.stop()
 
 
