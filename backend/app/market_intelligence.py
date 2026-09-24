@@ -623,6 +623,22 @@ def generate_report(api_key: str = "") -> dict:
                 })
 
             report.update(ai)
+            # Gemini 3.x free-tier fallback does not have Search grounding, so
+            # preserve the fresh RSS headlines directly when the model does not
+            # return structured news items. This prevents a report from showing
+            # "no news" while valid fresh headlines are already available.
+            if not isinstance(report.get("news_items"), list) or not report.get("news_items"):
+                report["news_items"] = [
+                    {
+                        "headline": item.get("headline", ""),
+                        "source": item.get("source", "Google News"),
+                        "impact": "medium",
+                        "sectors": [],
+                        "summary": "Fresh headline from the configured public news feed; detailed impact synthesis was not returned by the model.",
+                    }
+                    for item in fallback_news[:10]
+                    if item.get("headline")
+                ]
             report["sources"] = (sources or fallback_sources)[:15]
             # Keep machine-observed data-quality notes alongside any AI notes.
             report["data_quality"] = list(dict.fromkeys(
@@ -694,6 +710,18 @@ def generate_report(api_key: str = "") -> dict:
                         news_context=fallback_news,
                     )
                     report.update(ai)
+                    if not isinstance(report.get("news_items"), list) or not report.get("news_items"):
+                        report["news_items"] = [
+                            {
+                                "headline": item.get("headline", ""),
+                                "source": item.get("source", "Google News"),
+                                "impact": "medium",
+                                "sectors": [],
+                                "summary": "Fresh headline from the configured public news feed; detailed impact synthesis was not returned by the model.",
+                            }
+                            for item in fallback_news[:10]
+                            if item.get("headline")
+                        ]
                     report["sources"] = (sources or fallback_sources)[:15]
                     report["generated_by"] = f"rule-engine + {fallback_model} + Google News RSS"
                     report["data_quality"] = list(dict.fromkeys(
