@@ -14,6 +14,7 @@ IST = ZoneInfo("Asia/Kolkata")
 NSE_HOME = "https://www.nseindia.com"
 YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36"
+NSE_VERIFY_SSL = os.getenv("NSE_VERIFY_SSL", "true").strip().lower() not in {"0", "false", "no", "off"}
 SECTORS = [
     "Financials", "IT", "Pharma", "FMCG", "Auto", "Real Estate",
     "Aviation", "Oil & Gas", "Metals", "Chemicals", "Capital Goods",
@@ -94,10 +95,16 @@ def _session() -> requests.Session:
 
 def _nse_json(path: str):
     s = _session()
-    s.get(NSE_HOME, timeout=15, verify=False)
-    response = s.get(f"{NSE_HOME}/api/{path}", timeout=15, verify=False)
-    response.raise_for_status()
-    return response.json()
+    response = None
+    for attempt in range(2):
+        s.get(NSE_HOME, timeout=15, verify=NSE_VERIFY_SSL)
+        response = s.get(f"{NSE_HOME}/api/{path}", timeout=15, verify=NSE_VERIFY_SSL)
+        if response.ok:
+            return response.json()
+        if response.status_code not in {429, 500, 502, 503, 504} or attempt == 1:
+            response.raise_for_status()
+        time.sleep(1)
+    raise RuntimeError(f"NSE request failed: {path}")
 
 
 def _pct(item) -> float:
@@ -117,7 +124,12 @@ def _signal(value: float, threshold: float, up_positive: bool = True) -> float:
 def deterministic_analysis(data: dict) -> dict:
     g, i = data["global"], data["india"]
     factors = {
-        "us10y": _signal(_pct(g.get("US 10Y")), 0.05, False),
+        "us10y": _signal(
+            ((float(g.get("US 10Y", {}).get("last")) - float(g.get("US 10Y", {}).get("prev"))) * 100)
+            if g.get("US 10Y") and g.get("US 10Y").get("prev") is not None else 0.0,
+            5.0,
+            False,
+        ),
         "dxy": _signal(_pct(g.get("DXY")), 0.4, False),
         "nasdaq": _signal(_pct(g.get("Nasdaq")), 0.5),
         "dow": _signal(_pct(g.get("Dow")), 0.5),
