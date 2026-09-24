@@ -12,14 +12,6 @@ from .config import settings
 
 IST = ZoneInfo("Asia/Kolkata")
 NSE_HOME = "https://www.nseindia.com"
-YAHOO_QUOTE_ENDPOINTS = [
-    "https://query2.finance.yahoo.com/v7/finance/quote",
-    "https://query1.finance.yahoo.com/v7/finance/quote",
-]
-YAHOO_SPARK_ENDPOINTS = [
-    "https://query2.finance.yahoo.com/v7/finance/spark",
-    "https://query1.finance.yahoo.com/v7/finance/spark",
-]
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36"
 NSE_VERIFY_SSL = os.getenv("NSE_VERIFY_SSL", "true").strip().lower() not in {"0", "false", "no", "off"}
 SECTORS = [
@@ -399,8 +391,12 @@ market numbers. Do not give personalized trade instructions.
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Gemini returned invalid JSON: {text[:1200]}") from exc
     sources = []
-    grounding = candidate.get("groundingMetadata") or {}
-    chunks = grounding.get("groundingChunks") or []
+    grounding = (
+        candidate.get("groundingMetadata")
+        or candidate.get("grounding_metadata")
+        or {}
+    )
+    chunks = grounding.get("groundingChunks") or grounding.get("grounding_chunks") or []
     for chunk in chunks:
         web = chunk.get("web") or {}
         uri, title = web.get("uri"), web.get("title")
@@ -519,6 +515,17 @@ def generate_report(api_key: str = "") -> dict:
                 })
             report["sector_impacts"] = sorted(merged, key=lambda x: -abs(x["score"]))
             report["generated_by"] = f"rule-engine + {runtime_model} + Google Search"
+            verified_global = sum(
+                1 for name in (
+                    "Nasdaq", "Dow", "S&P 500", "Nikkei", "Hang Seng",
+                    "Shanghai", "Brent", "Gold", "DXY", "US 10Y", "USD/INR"
+                )
+                if market["global"].get(name, {}).get("last") is not None
+                or market["india"].get(name, {}).get("last") is not None
+            )
+            market["quality"].append(
+                f"Google Search global-cue coverage: {verified_global}/11 verified."
+            )
             report["data_quality"] = list(dict.fromkeys(
                 (market.get("quality") or []) + (report.get("data_quality") or [])
             ))[:12]
