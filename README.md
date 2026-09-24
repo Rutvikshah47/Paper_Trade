@@ -153,3 +153,28 @@ source .venv/bin/activate
 cd ..
 pytest -q
 ```
+
+## Market Intelligence
+
+The Market Intelligence page generates a fresh report on demand; no scheduled job is required.
+
+Click **Market Intelligence** in the header, then **Generate fresh report**. The backend fetches current India/global market data (including GIFT Nifty, US/Asian indices, US 10Y, DXY, Brent, gold, USD/INR, India VIX, Nifty/sector indices, breadth and FII/DII flows), calculates a deterministic market/sector baseline, and then uses Gemini with Google Search grounding for fresh news, sector read-through and a conditional outlook.
+
+Set in `backend/.env`:
+
+```text
+GEMINI_API_KEY=YOUR_GEMINI_API_KEY
+GEMINI_MODEL=gemini-3.8-flash
+```
+
+The API key stays on the backend and is never exposed to the browser. Reports are persisted in the `market_reports` table so previous manual generations can be compared later.
+
+The sector score is anchored to deterministic market sensitivities. Gemini may add an explicit news adjustment of at most +/-20; the supplied market-data numbers are not replaced by AI-generated numbers.
+
+Endpoints:
+
+```text
+GET  /api/market-intelligence/latest
+GET  /api/market-intelligence/history?limit=8
+POST /api/market-intelligence/generate
+```
