@@ -11,6 +11,13 @@ import requests
 from .config import settings
 
 IST = ZoneInfo("Asia/Kolkata")
+_LAST_GEMINI_STATUS = {
+    "configured": False,
+    "model": None,
+    "ok": False,
+    "error": None,
+    "sources": 0,
+}
 NSE_HOME = "https://www.nseindia.com"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36"
 NSE_VERIFY_SSL = os.getenv("NSE_VERIFY_SSL", "true").strip().lower() not in {"0", "false", "no", "off"}
@@ -287,6 +294,14 @@ def deterministic_analysis(data: dict) -> dict:
 
 
 def _gemini(api_key: str, market: dict, baseline: dict, model: str):
+    global _LAST_GEMINI_STATUS
+    _LAST_GEMINI_STATUS = {
+        "configured": bool(api_key),
+        "model": model,
+        "ok": False,
+        "error": None,
+        "sources": 0,
+    }
     prompt = f"""
 {NEWS_INSTRUCTION}
 
@@ -328,6 +343,18 @@ market numbers. Do not give personalized trade instructions.
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "tools": [{"google_search": {}}],
     }
+    # Gemini 2.5 Flash-Lite supports Search grounding and structured output
+    # independently, but Google's current docs restrict combining structured
+    # outputs with built-in tools to Gemini 3-series models. The free-tier
+    # configuration deliberately uses 2.5 Flash-Lite + Search, so send plain
+    # JSON text and validate it locally instead of causing a 400 request.
+    plain_payload = {
+        **base_payload,
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 8000,
+        },
+    }
     structured_payload = {
         **base_payload,
         "generationConfig": {
@@ -337,22 +364,20 @@ market numbers. Do not give personalized trade instructions.
             "maxOutputTokens": 8000,
         },
     }
-    plain_payload = {
-        **base_payload,
-        "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 8000,
-        },
-    }
 
     last_error = None
     bodies = []
     models_to_try = [model]
-    if model == "gemini-2.5-flash-lite":
-        models_to_try.append("gemini-2.5-flash")
+    payloads_by_model = {}
+    for selected_model in models_to_try:
+        payloads_by_model[selected_model] = (
+            (structured_payload, plain_payload)
+            if selected_model.startswith("gemini-3")
+            else (plain_payload,)
+        )
 
     for selected_model in models_to_try:
-        for payload_variant in (structured_payload, plain_payload):
+        for payload_variant in payloads_by_model[selected_model]:
             for attempt in range(2):
                 try:
                     response = requests.post(
@@ -382,6 +407,7 @@ market numbers. Do not give personalized trade instructions.
             break
 
     if not bodies:
+        _LAST_GEMINI_STATUS["error"] = str(last_error or "Gemini request failed")[:1000]
         raise last_error or RuntimeError("Gemini request failed")
 
     body = bodies[0]
@@ -411,6 +437,11 @@ market numbers. Do not give personalized trade instructions.
         uri, title = web.get("uri"), web.get("title")
         if uri and not any(x["url"] == uri for x in sources):
             sources.append({"title": title or uri, "url": uri})
+    _LAST_GEMINI_STATUS.update({
+        "ok": True,
+        "error": None,
+        "sources": len(sources),
+    })
     return result, sources
 
 
