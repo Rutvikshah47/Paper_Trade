@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -126,7 +126,7 @@ def _google_news_rss() -> tuple[list[dict], list[dict]]:
         try:
             from urllib.parse import quote_plus
             import xml.etree.ElementTree as ET
-            url = "https://news.google.com/rss/search?q=" + quote_plus(query) + "&hl=en-IN&gl=IN&ceid=IN:en"
+            url = "https://news.google.com/rss/search?q=" + quote_plus(query + " when:1d") + "&hl=en-IN&gl=IN&ceid=IN:en"
             response = session.get(url, timeout=15)
             response.raise_for_status()
             root = ET.fromstring(response.content)
@@ -134,6 +134,18 @@ def _google_news_rss() -> tuple[list[dict], list[dict]]:
                 title = (node.findtext("title") or "").strip()
                 link = (node.findtext("link") or "").strip()
                 pub = (node.findtext("pubDate") or "").strip()
+                # Google News RSS can occasionally surface old indexed stories.
+                # Keep only genuinely fresh headlines for the pre-market report.
+                try:
+                    from email.utils import parsedate_to_datetime
+                    published_at = parsedate_to_datetime(pub)
+                    if published_at.tzinfo is None:
+                        published_at = published_at.replace(tzinfo=timezone.utc)
+                    age = datetime.now(timezone.utc) - published_at.astimezone(timezone.utc)
+                    if age < timedelta(0) or age > timedelta(hours=48):
+                        continue
+                except Exception:
+                    continue
                 source_node = node.find("source")
                 source = (source_node.text or "").strip() if source_node is not None else "Google News"
                 if not title:
