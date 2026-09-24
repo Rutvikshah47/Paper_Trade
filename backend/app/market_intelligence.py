@@ -331,8 +331,8 @@ market numbers. Do not give personalized trade instructions.
     structured_payload = {
         **base_payload,
         "generationConfig": {
-            "response_mime_type": "application/json",
-            "response_schema": REPORT_SCHEMA,
+            "responseMimeType": "application/json",
+            "responseSchema": REPORT_SCHEMA,
             "temperature": 0.2,
             "maxOutputTokens": 8000,
         },
