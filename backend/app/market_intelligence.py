@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -12,22 +14,6 @@ IST = ZoneInfo("Asia/Kolkata")
 NSE_HOME = "https://www.nseindia.com"
 YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36"
-GEMINI_MODEL = settings.gemini_model
-
-YAHOO_SYMBOLS = {
-    "Nasdaq": "^IXIC",
-    "Dow": "^DJI",
-    "S&P 500": "^GSPC",
-    "Nikkei": "^N225",
-    "Hang Seng": "^HSI",
-    "Shanghai": "000001.SS",
-    "Brent": "BZ=F",
-    "Gold": "GC=F",
-    "DXY": "DX-Y.NYB",
-    "US 10Y": "^TNX",
-    "USD/INR": "INR=X",
-}
-
 SECTORS = [
     "Financials", "IT", "Pharma", "FMCG", "Auto", "Real Estate",
     "Aviation", "Oil & Gas", "Metals", "Chemicals", "Capital Goods",
