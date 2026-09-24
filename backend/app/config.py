@@ -26,6 +26,8 @@ class Settings:
     )
     upstox_verify_ssl: bool = _bool("UPSTOX_VERIFY_SSL", True)
     telegram_verify_ssl: bool = _bool("TELEGRAM_VERIFY_SSL", True)
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
     cors_origins: list[str] = field(default_factory=lambda: [x.strip() for x in os.getenv("CORS_ORIGINS", "*").split(",") if x.strip()] or ["*"])
 
 
