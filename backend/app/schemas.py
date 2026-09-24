@@ -123,3 +123,25 @@ class RiskView(BaseModel):
     probability: dict | None = None
     history: list[RiskSnapshotView] = Field(default_factory=list)
     events: list[StrategyEventView] = Field(default_factory=list)
+
+
+
+class MarketReportView(BaseModel):
+    id: int
+    report_date: str
+    generated_at: datetime
+    market_mood: str
+    market_pressure: float | None = None
+    confidence: float | None = None
+    global_cues: list[dict] = Field(default_factory=list)
+    india_snapshot: list[dict] = Field(default_factory=list)
+    drivers: list[dict] = Field(default_factory=list)
+    sector_impacts: list[dict] = Field(default_factory=list)
+    news_items: list[dict] = Field(default_factory=list)
+    events: list[dict] = Field(default_factory=list)
+    watchlist: list[str] = Field(default_factory=list)
+    summary: str = ""
+    outlook: str = ""
+    sources: list[dict] = Field(default_factory=list)
+    data_quality: list[str] = Field(default_factory=list)
+    generated_by: str = "rule-engine"
