@@ -195,17 +195,24 @@ def _nse_json(path: str):
 
 
 def _upstox_global_snapshot() -> tuple[dict[str, dict], list[str]]:
-    """Load Upstox's official global-instrument master and quote supported globals."""
+    """Load and quote Upstox Global Instruments with per-key isolation.
+
+    Upstox documents Global Instruments as supported by Full Market Quote V3
+    and LTP V3. A single rejected key can make a multi-key request fail, so
+    quote each resolved instrument independently and fall back to LTP V3.
+    """
     if not settings.upstox_access_token:
         return {}, ["Upstox global data unavailable: UPSTOX_ACCESS_TOKEN is not configured."]
 
     master_url = "https://assets.upstox.com/market-quote/instruments/exchange/global.json.gz"
     quote_url = "https://api.upstox.com/v3/market-quote/quotes"
+    ltp_url = "https://api.upstox.com/v3/market-quote/ltp"
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {settings.upstox_access_token}",
     }
     quality = []
+
     try:
         response = requests.get(
             master_url,
@@ -220,10 +227,12 @@ def _upstox_global_snapshot() -> tuple[dict[str, dict], list[str]]:
     except Exception as exc:
         return {}, [f"Upstox global instrument master unavailable: {str(exc)[:220]}"]
 
+    # Match the display names against the official Global Instruments master.
+    # The master is the source of truth for instrument_key values.
     wanted = {
         "GIFT Nifty": ["GIFT NIFTY"],
         "Dow": ["DOW JONES", "US 30"],
-        "S&P 500": ["S&P", "S&P 500"],
+        "S&P 500": ["S&P 500", "S&P"],
         "Nasdaq": ["US TECH 100", "NASDAQ"],
         "Nikkei": ["NIKKEI 225", "NIKKEI"],
         "Hang Seng": ["HANG SENG"],
@@ -234,72 +243,130 @@ def _upstox_global_snapshot() -> tuple[dict[str, dict], list[str]]:
         "WTI": ["OIL (WTI)", "WTI"],
         "USD/INR": ["USD INR", "USD/INR"],
     }
+
     normalized = []
     for row in instruments:
         if not isinstance(row, dict):
             continue
         name = str(row.get("name") or row.get("trading_symbol") or "").strip()
         key = str(row.get("instrument_key") or "").strip()
-        if name and key:
-            normalized.append((name.upper(), key, name))
+        segment = str(row.get("segment") or "").strip()
+        if name and key and segment in {"GLOBAL_INDEX", "GLOBAL_INDICATOR"}:
+            normalized.append((name.upper(), key, name, segment))
 
     resolved = {}
     for display, aliases in wanted.items():
         match = None
         for alias in aliases:
-            match = next((x for x in normalized if x[0] == alias), None)
+            match = next((x for x in normalized if x[0] == alias.upper()), None)
             if match:
                 break
         if not match:
             for alias in aliases:
-                match = next((x for x in normalized if alias in x[0]), None)
+                match = next((x for x in normalized if alias.upper() in x[0]), None)
                 if match:
                     break
         if match:
-            resolved[display] = {"instrument_key": match[1], "master_name": match[2]}
+            resolved[display] = {
+                "instrument_key": match[1],
+                "master_name": match[2],
+                "segment": match[3],
+            }
         else:
             quality.append(f"Upstox global instrument not published: {display}")
 
     if not resolved:
         return {}, quality
 
-    try:
-        response = requests.get(
-            quote_url,
-            headers=headers,
-            params={"instrument_key": ",".join(x["instrument_key"] for x in resolved.values())},
-            timeout=20,
-            verify=settings.upstox_verify_ssl,
-        )
-        response.raise_for_status()
-        quote_data = (response.json().get("data") or {})
-    except Exception as exc:
-        return {}, quality + [f"Upstox global quote request failed: {str(exc)[:220]}"]
-
     result = {}
-    for display, info in resolved.items():
-        key = info["instrument_key"]
-        row = quote_data.get(key)
-        if not isinstance(row, dict):
-            row = next((v for k, v in quote_data.items() if str(k) == key), None)
-        if not isinstance(row, dict):
-            quality.append(f"Upstox global quote missing: {display}")
-            continue
+
+    def _parse_quote_row(display: str, info: dict, row: dict, source: str) -> bool:
         last = _float_value(row.get("last_price") or row.get("lastPrice"))
+        # Full Market Quote V3 calls this prev_close_price; LTP V3 calls it cp.
         prev = _float_value(row.get("prev_close_price") or row.get("cp"))
         if last is None:
             quality.append(f"Upstox global LTP missing: {display}")
-            continue
+            return False
         pct = ((last / prev) - 1) * 100 if prev not in (None, 0) else None
         result[display] = {
             "last": last,
             "prev": prev,
             "pct": pct,
-            "source": "Upstox Global Instruments",
-            "instrument_key": key,
+            "source": source,
+            "instrument_key": info["instrument_key"],
         }
-    return result, quality
+        return True
 
+    # Request each instrument separately. Upstox supports comma-separated keys,
+    # but isolating requests means one unsupported/stale global key cannot cause
+    # the complete 12-instrument request to return HTTP 400.
+    for display, info in resolved.items():
+        key = info["instrument_key"]
+        try:
+            response = requests.get(
+                quote_url,
+                headers=headers,
+                params={"instrument_key": key},
+                timeout=15,
+                verify=settings.upstox_verify_ssl,
+            )
+            if response.ok:
+                quote_data = response.json().get("data") or {}
+                # Full Market Quote keys are normalized as SEGMENT:SYMBOL.
+                row = quote_data.get(key)
+                if not isinstance(row, dict):
+                    normalized_key = key.replace("|", ":", 1)
+                    row = quote_data.get(normalized_key)
+                if not isinstance(row, dict):
+                    row = next(
+                        (v for k, v in quote_data.items() if str(k) == key or str(k) == key.replace("|", ":", 1)),
+                        None,
+                    )
+                if isinstance(row, dict) and _parse_quote_row(display, info, row, "Upstox Global Instruments"):
+                    continue
+            else:
+                body = response.text[:500].replace("\\n", " ")
+                quality.append(
+                    f"Upstox Full Market Quote rejected {display} ({key}): "
+                    f"HTTP {response.status_code} {body}"
+                )
+        except Exception as exc:
+            quality.append(f"Upstox Full Market Quote failed {display} ({key}): {str(exc)[:180]}")
+
+        # LTP V3 is explicitly documented by Upstox for Global Instruments and
+        # includes both last_price and cp (previous-session close).
+        try:
+            response = requests.get(
+                ltp_url,
+                headers=headers,
+                params={"instrument_key": key},
+                timeout=15,
+                verify=settings.upstox_verify_ssl,
+            )
+            if response.ok:
+                quote_data = response.json().get("data") or {}
+                row = quote_data.get(key)
+                if not isinstance(row, dict):
+                    row = quote_data.get(key.replace("|", ":", 1))
+                if not isinstance(row, dict):
+                    row = next(
+                        (v for k, v in quote_data.items() if str(k) == key or str(k) == key.replace("|", ":", 1)),
+                        None,
+                    )
+                if isinstance(row, dict) and _parse_quote_row(display, info, row, "Upstox Global Instruments (LTP V3)"):
+                    continue
+            else:
+                body = response.text[:500].replace("\\n", " ")
+                quality.append(
+                    f"Upstox LTP V3 rejected {display} ({key}): "
+                    f"HTTP {response.status_code} {body}"
+                )
+        except Exception as exc:
+            quality.append(f"Upstox LTP V3 failed {display} ({key}): {str(exc)[:180]}")
+
+        quality.append(f"Upstox global quote unavailable: {display} ({key})")
+
+    return result, quality
 
 def collect_market_data() -> dict:
     data = {"fetched_at": datetime.now(IST).isoformat(), "global": {}, "india": {}, "quality": []}
