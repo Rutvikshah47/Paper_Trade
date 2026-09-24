@@ -145,7 +145,7 @@ def deterministic_analysis(data: dict) -> dict:
     return {"pressure": pressure, "sector_scores": sector_scores, "factors": factors}
 
 
-def _gemini(api_key: str, market: dict, baseline: dict):
+def _gemini(api_key: str, market: dict, baseline: dict, model: str):
     prompt = f"""
 {NEWS_INSTRUCTION}
 
@@ -157,15 +157,25 @@ MARKET DATA (authoritative for numbers):
 DETERMINISTIC BASELINE:
 {json.dumps(baseline, indent=2)}
 
-Search for fresh news from the last 24 hours and today's events. Cover India,
-US, Asia, Europe, central banks, inflation/rates, crude/energy, geopolitics,
-trade/tariffs, major Indian company or sector developments, and anything that
-could materially affect Indian equities. Also assess the three conditional
-scenarios: Constructive, Base case, and Cautious. Each scenario must name the
-observable trigger and the India-market read-through. Do not assign made-up
+Use Google Search for fresh information from the last 24 hours and today's
+latest available market sessions.
+
+Return GLOBAL CUES for these instruments only when you can verify the latest
+value and previous close/session: Nasdaq, Dow, S&P 500, Nikkei, Hang Seng,
+Shanghai, Brent, Gold, DXY, US 10Y, USD/INR. Do not invent values. For US 10Y
+return the yield level and previous-session yield.
+
+Find material current NEWS affecting Indian equities. Cover India, US, Asia,
+Europe, central banks, inflation/rates, crude/energy, currencies, geopolitics,
+trade/tariffs, major Indian companies and sectors. Prefer authoritative sources
+such as Reuters, Bloomberg, CNBC, Financial Times, WSJ, RBI, Federal Reserve,
+ECB, BoJ, NSE/BSE, company filings and government releases.
+
+Also assess Constructive, Base case and Cautious scenarios. Each scenario must
+name an observable trigger and India-market read-through. Do not assign made-up
 probabilities.
 
-Return structured JSON only. Keep the supplied numeric market data unchanged.
+Return structured JSON only. Keep the supplied Indian numeric market data unchanged.
 For each sector, start from its deterministic baseline score and use ai_adjustment
 (-20 to +20) only for a clear fresh-news reason. Do not invent source URLs or
 market numbers. Do not give personalized trade instructions.
@@ -181,7 +191,7 @@ market numbers. Do not give personalized trade instructions.
         },
     }
     response = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
         json=payload,
         timeout=90,
