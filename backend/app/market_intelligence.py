@@ -238,6 +238,8 @@ def _rule_news(baseline: dict) -> list[dict]:
 
 
 def generate_report(api_key: str = "") -> dict:
+    runtime_api_key = (os.getenv("GEMINI_API_KEY") or api_key or "").strip()
+    runtime_model = (os.getenv("GEMINI_MODEL") or settings.gemini_model).strip()
     market = collect_market_data()
     baseline = deterministic_analysis(market)
     sectors = []
@@ -254,8 +256,8 @@ def generate_report(api_key: str = "") -> dict:
 
     report = {
         "market_mood": "Neutral / Mixed",
-        "summary": "Fresh market data collected. Add Gemini API access for grounded news synthesis.",
-        "outlook": "Watch GIFT Nifty, US yields, Brent, USD/INR, India VIX and FII flows.",
+        "summary": "Indian market data collected. Gemini adds grounded global cues, news and sector read-through when configured.",
+        "outlook": "Watch GIFT Nifty, global cues, US yields, Brent, USD/INR, India VIX and FII flows.",
         "confidence": 60,
         "drivers": _rule_news(baseline),
         "sector_impacts": sectors,
@@ -263,15 +265,46 @@ def generate_report(api_key: str = "") -> dict:
         "watchlist": ["GIFT Nifty", "Nifty 50", "Bank Nifty", "India VIX", "USD/INR", "Brent"],
         "events": [],
         "scenarios": [
-            {"name": "Base case", "trigger": "Current macro mix persists", "read_through": "Mixed session with sector rotation driven by rates, crude and global cues."}
+            {"name": "Constructive", "trigger": "Global risk assets remain firm and domestic breadth improves", "read_through": "Broader participation could support risk appetite."},
+            {"name": "Base case", "trigger": "Current macro mix persists", "read_through": "Mixed session with rotation driven by rates, crude, flows and global cues."},
+            {"name": "Cautious", "trigger": "Global risk-off strengthens and domestic breadth remains weak", "read_through": "Pressure could remain concentrated in high-beta and rate-sensitive segments."}
         ],
         "data_quality": [],
         "sources": [],
     }
 
-    if api_key:
+    if runtime_api_key:
         try:
-            ai, sources = _gemini(api_key, market, baseline)
+            ai, sources = _gemini(runtime_api_key, market, baseline, runtime_model)
+            search_global = ai.get("global_cues") or []
+            for item in search_global:
+                name = str(item.get("name") or "").strip()
+                try:
+                    last = float(item.get("last"))
+                    prev = float(item.get("prev"))
+                    pct = float(item.get("pct"))
+                except (TypeError, ValueError):
+                    continue
+                if not name or prev == 0:
+                    continue
+                if name == "GIFT Nifty":
+                    continue
+                target = market["india"] if name == "USD/INR" else market["global"]
+                target[name] = {"last": last, "prev": prev, "pct": pct, "source": "Gemini Google Search"}
+
+            baseline = deterministic_analysis(market)
+            sectors = []
+            for sector, score in sorted(baseline["sector_scores"].items(), key=lambda x: -abs(x[1])):
+                sectors.append({
+                    "sector": sector,
+                    "direction": "positive" if score > 10 else "negative" if score < -10 else "mixed",
+                    "score": score,
+                    "rule_score": score,
+                    "ai_adjustment": 0,
+                    "confidence": 60,
+                    "reason": "Deterministic baseline using NSE data plus search-verified global cues.",
+                })
+
             report.update(ai)
             report["sources"] = sources[:15]
             # Keep machine-observed data-quality notes alongside any AI notes.
@@ -296,9 +329,12 @@ def generate_report(api_key: str = "") -> dict:
                     "reason": item.get("reason") or sector_row["reason"],
                 })
             report["sector_impacts"] = sorted(merged, key=lambda x: -abs(x["score"]))
-            report["generated_by"] = f"rule-engine + {GEMINI_MODEL} + Google Search"
+            report["generated_by"] = f"rule-engine + {runtime_model} + Google Search"
+            report["data_quality"] = list(dict.fromkeys(
+                (market.get("quality") or []) + (report.get("data_quality") or [])
+            ))[:12]
         except Exception as exc:
-            market["quality"].append("Gemini unavailable: " + str(exc))
+            market["quality"].insert(0, "Gemini unavailable: " + str(exc)[:1000])
 
     report["report_date"] = datetime.now(IST).date().isoformat()
     report["generated_at"] = datetime.now(IST).isoformat()
@@ -307,7 +343,9 @@ def generate_report(api_key: str = "") -> dict:
     report["market_pressure"] = baseline["pressure"]
     report["data_quality"] = list(dict.fromkeys(
         (market.get("quality") or []) + (report.get("data_quality") or [])
-    ))[:8]
+    ))[:12]
+    if not runtime_api_key:
+        report["data_quality"].insert(0, "Gemini disabled: GEMINI_API_KEY is not available to the running process.")
     report.setdefault("generated_by", "rule-engine")
     return report
 
