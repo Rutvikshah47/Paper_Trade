@@ -102,6 +102,10 @@ def _float_value(value):
         return None
 
 
+def gemini_status() -> dict:
+    return dict(_LAST_GEMINI_STATUS)
+
+
 def _session() -> requests.Session:
     s = requests.Session()
     s.headers.update({"User-Agent": UA, "Accept": "*/*", "Referer": NSE_HOME + "/"})
