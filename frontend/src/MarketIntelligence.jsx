@@ -44,15 +44,18 @@ function MarketIntelligence({apiUrl}){
   const [history,setHistory]=useState([])
   const [loading,setLoading]=useState(false)
   const [error,setError]=useState('')
+  const [health,setHealth]=useState(null)
 
   const load=async()=>{
     try{
-      const [latest,hist]=await Promise.all([
+      const [latest,hist,status]=await Promise.all([
         fetch(apiUrl('/api/market-intelligence/latest')),
-        fetch(apiUrl('/api/market-intelligence/history?limit=8'))
+        fetch(apiUrl('/api/market-intelligence/history?limit=8')),
+        fetch(apiUrl('/api/health'))
       ])
       if(latest.ok)setReport(await latest.json())
       if(hist.ok)setHistory(await hist.json())
+      if(status.ok)setHealth(await status.json())
     }catch(e){setError('Unable to load market intelligence: '+e.message)}
   }
   useEffect(()=>{load()},[])
@@ -85,6 +88,7 @@ function MarketIntelligence({apiUrl}){
       <div><div className="section-kicker">MARKET INTELLIGENCE</div><h1>India pre-market report</h1><p>Fresh global cues, India data, grounded news and sector read-through in one view.</p></div>
       <div className="mi-header-actions">
         {report?<span className="mi-updated">{report.generated_by?.includes('Gemini failed')?'Gemini failed · Rule engine fallback':report.generated_by?.includes('Gemini')?'Gemini + Google Search':'Rule engine only'} · Updated {new Date(report.generated_at).toLocaleString()}</span>:null}
+        {health?<span className="mi-updated">Service: {health.gemini_configured?'Gemini configured':'Gemini not configured'} · {health.gemini_model||'no model'}</span>:null}
         <button className="button-primary" onClick={generate} disabled={loading}>{loading?'Gathering markets + news…':'↻ Generate fresh report'}</button>
       </div>
     </section>
