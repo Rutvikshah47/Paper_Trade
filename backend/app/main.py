@@ -668,6 +668,9 @@ def health() -> dict[str, Any]:
         'upstox_configured': bool(runtime_settings.upstox_access_token),
         'gemini_configured': bool(runtime_settings.gemini_api_key),
         'gemini_model': runtime_settings.gemini_model,
+        'environment': os.getenv('RAILWAY_ENVIRONMENT_NAME', 'unknown'),
+        'deployment': os.getenv('RAILWAY_DEPLOYMENT_ID', 'unknown'),
+        'git_commit': os.getenv('RAILWAY_GIT_COMMIT_SHA', 'unknown'),
         'last_market_error': market.last_error,
     }
 
